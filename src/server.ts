@@ -1,8 +1,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createOpenAiCompatibleProvider } from "./ai/openai-compatible.js";
+import { buildDirectChatRequest } from "./chat/direct-chat.js";
 import { loadRuntimeConfig, type RuntimeConfig } from "./config.js";
 import { buildNpcPrompt } from "./prompt/prompt-builder.js";
-import type { ChatRequest } from "./types.js";
+import type { ChatMessage, ChatRequest } from "./types.js";
 
 async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -24,17 +25,28 @@ function writeJson(response: ServerResponse, statusCode: number, payload: unknow
 function validateChatRequest(value: unknown): ChatRequest {
   const candidate = value as Partial<ChatRequest>;
   if (!candidate || typeof candidate !== "object") throw new Error("request body must be JSON");
-  if (!candidate.npcId || typeof candidate.npcId !== "string") throw new Error("npcId is required");
-  if (!candidate.playerId || typeof candidate.playerId !== "string") {
-    throw new Error("playerId is required");
-  }
   if (!candidate.message || typeof candidate.message !== "string") {
     throw new Error("message is required");
   }
+  const messages = Array.isArray(candidate.messages)
+    ? candidate.messages.map((message) => {
+        const item = message as Partial<ChatMessage>;
+        if (
+          !item ||
+          (item.role !== "system" && item.role !== "user" && item.role !== "assistant") ||
+          typeof item.content !== "string"
+        ) {
+          throw new Error("messages must contain role/content chat messages");
+        }
+        return { role: item.role, content: item.content };
+      })
+    : undefined;
+
   return {
-    npcId: candidate.npcId,
-    playerId: candidate.playerId,
+    npcId: typeof candidate.npcId === "string" ? candidate.npcId : undefined,
+    playerId: typeof candidate.playerId === "string" ? candidate.playerId : undefined,
     message: candidate.message,
+    messages,
     temperature: typeof candidate.temperature === "number" ? candidate.temperature : undefined
   };
 }
@@ -53,15 +65,18 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig()) {
 
       if (request.method === "POST" && url.pathname === "/api/chat") {
         const chatRequest = validateChatRequest(await readJsonBody(request));
-        const prompt = await buildNpcPrompt({
-          npcId: chatRequest.npcId,
-          playerId: chatRequest.playerId,
-          userMessage: chatRequest.message,
-          wikiEntriesDir: config.wikiEntriesDir,
-          npcRootDir: config.npcRootDir
-        });
+        const providerRequest =
+          chatRequest.npcId && chatRequest.playerId
+            ? await buildNpcPrompt({
+                npcId: chatRequest.npcId,
+                playerId: chatRequest.playerId,
+                userMessage: chatRequest.message,
+                wikiEntriesDir: config.wikiEntriesDir,
+                npcRootDir: config.npcRootDir
+              })
+            : buildDirectChatRequest(chatRequest);
         const result = await provider.chat({
-          messages: prompt.messages,
+          messages: providerRequest.messages,
           temperature: chatRequest.temperature
         });
         writeJson(response, 200, result);

@@ -18,14 +18,6 @@ pnpm test
 pnpm dev
 ```
 
-本地如需真实调用模型：
-
-```bash
-cp config.example.json config.local.json
-export DEEPSEEK_API_KEY=sk-xxx
-pnpm dev
-```
-
 ## API
 
 ```http
@@ -37,61 +29,10 @@ POST /api/chat
 Content-Type: application/json
 
 {
-  "npcId": "char.example",
-  "playerId": "pl.example",
-  "message": "你还记得我吗？",
-  "temperature": 0.6
+  "message": "你还记得我吗？"
 }
 ```
 
-## 服务器配置建议
+## GitHub Actions 自动部署
 
-把密钥放在服务器，不放 GitHub Actions：
-
-```bash
-sudo mkdir -p /etc/trpg-ai
-sudo nano /etc/trpg-ai/trpg-ai.env
-sudo chmod 600 /etc/trpg-ai/trpg-ai.env
-```
-
-示例：
-
-```bash
-PORT=3001
-WIKI_ENTRIES_DIR=/var/www/trpg-helper/wiki/entities/entries
-NPC_ROOT_DIR=/opt/trpg-ai-gateway/data/npcs
-AI_BASE_URL=https://api.deepseek.com
-AI_MODEL=deepseek-v4-flash
-DEEPSEEK_API_KEY=sk-xxx
-```
-
-systemd 服务可使用：
-
-```ini
-[Unit]
-Description=TRPG AI Gateway
-After=network.target
-
-[Service]
-WorkingDirectory=/opt/trpg-ai-gateway
-EnvironmentFile=/etc/trpg-ai/trpg-ai.env
-ExecStart=/usr/bin/node dist/server.js
-Restart=always
-User=www-data
-Group=www-data
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Nginx 反代：
-
-```nginx
-location /api/ai/ {
-    proxy_pass http://127.0.0.1:3001/api/;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_buffering off;
-    proxy_read_timeout 300s;
-}
-```
+子仓库 push 到 `main` 或 `master` 会触发 `.github/workflows/deploy.yml`。部署目录、服务名、运行时环境文件、模型 key 与服务器网络细节均由 GitHub Secrets 或服务器本地配置提供，不写入公开仓库。

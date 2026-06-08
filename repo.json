@@ -12,35 +12,20 @@
     "health": "GET /health",
     "chat": "POST /api/chat"
   },
+  "deployment": {
+    "githubActions": ".github/workflows/deploy.yml",
+    "runtimeConfig": "server-managed",
+    "service": "server-managed"
+  },
   "importantPaths": {
-    "runtimeConfigExample": "config.example.json",
     "npcMemoryRoot": "data/npcs",
     "skills": "skills",
     "source": "src"
   },
-  "serverConfig": {
-    "defaultPort": 3001,
-    "defaultWikiEntriesDir": "/var/www/trpg-helper/wiki/entities/entries",
-    "secretEnvFileRecommendation": "/etc/trpg-ai/trpg-ai.env"
-  },
   "securityRules": [
     "不要把任何 AI API key、session secret 或真实服务 token 提交进 Git。",
     "AI key 只能从服务器环境变量读取，不能通过前端请求传入。",
-    "前端请求只能传 npcId、playerId、message、temperature；provider/baseUrl/model 必须由服务器白名单配置决定。",
+    "前端请求只能传 npcId、playerId、message、messages、temperature；provider/baseUrl/model 必须由服务器配置决定。",
     "父工程 Wiki 中未授权的 secret-panel 和 secret-inline 不应进入 prompt。"
-  ],
-  "modelProviders": [
-    {
-      "id": "deepseek",
-      "baseUrl": "https://api.deepseek.com",
-      "defaultModel": "deepseek-v4-flash",
-      "apiKeyEnv": "DEEPSEEK_API_KEY"
-    },
-    {
-      "id": "openai-compatible-custom",
-      "baseUrlEnv": "AI_BASE_URL",
-      "modelEnv": "AI_MODEL",
-      "apiKeyEnv": "DEEPSEEK_API_KEY or custom api key env configured by AI_API_KEY_ENV"
-    }
   ]
 }

@@ -10,9 +10,10 @@ export interface PromptBuildResult {
 }
 
 export interface ChatRequest {
-  npcId: string;
-  playerId: string;
+  npcId?: string;
+  playerId?: string;
   message: string;
+  messages?: ChatMessage[];
   temperature?: number;
 }
 

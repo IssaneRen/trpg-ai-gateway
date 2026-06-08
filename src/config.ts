@@ -35,19 +35,16 @@ function requireValue(value: string | undefined, label: string): string {
 
 export function loadRuntimeConfig(): RuntimeConfig {
   const local = readLocalConfig();
-  const apiKeyEnv = local.ai?.apiKeyEnv ?? process.env.AI_API_KEY_ENV ?? "DEEPSEEK_API_KEY";
+  const apiKeyEnv = requireValue(local.ai?.apiKeyEnv ?? process.env.AI_API_KEY_ENV, "AI_API_KEY_ENV");
+  const localPort = local.port === undefined ? undefined : String(local.port);
 
   return {
-    port: Number(process.env.PORT ?? local.port ?? 3001),
-    wikiEntriesDir: resolve(
-      process.env.WIKI_ENTRIES_DIR ??
-        local.wikiEntriesDir ??
-        "/var/www/trpg-helper/wiki/entities/entries"
-    ),
-    npcRootDir: resolve(process.env.NPC_ROOT_DIR ?? local.npcRootDir ?? "./data/npcs"),
+    port: Number(requireValue(process.env.PORT ?? localPort, "PORT")),
+    wikiEntriesDir: resolve(requireValue(process.env.WIKI_ENTRIES_DIR ?? local.wikiEntriesDir, "WIKI_ENTRIES_DIR")),
+    npcRootDir: resolve(requireValue(process.env.NPC_ROOT_DIR ?? local.npcRootDir, "NPC_ROOT_DIR")),
     ai: {
-      baseUrl: process.env.AI_BASE_URL ?? local.ai?.baseUrl ?? "https://api.deepseek.com",
-      model: process.env.AI_MODEL ?? local.ai?.model ?? "deepseek-v4-flash",
+      baseUrl: requireValue(process.env.AI_BASE_URL ?? local.ai?.baseUrl, "AI_BASE_URL"),
+      model: requireValue(process.env.AI_MODEL ?? local.ai?.model, "AI_MODEL"),
       apiKey: requireValue(process.env[apiKeyEnv], apiKeyEnv)
     }
   };
