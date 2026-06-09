@@ -94,12 +94,6 @@ jobs:
             RELEASE_DIR="${APP_DIR}/releases/${{ github.sha }}"
 
             tar -xzf /tmp/trpg-ai-gateway.tar.gz -C "$RELEASE_DIR"
-            cd "$RELEASE_DIR"
-            if ! command -v pnpm >/dev/null 2>&1; then
-              corepack enable
-              corepack prepare pnpm@10 --activate
-            fi
-            pnpm install --prod --frozen-lockfile
 
             sudo ln -sfn "$RELEASE_DIR" "${APP_DIR}/current"
 
