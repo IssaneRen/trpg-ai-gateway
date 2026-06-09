@@ -6,6 +6,7 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  AI_GATEWAY_APP_DIR: /var/www/trpg-ai-gateway
 
 jobs:
   build-and-deploy:
@@ -54,11 +55,7 @@ jobs:
           port: 22
           script: |
             set -eu
-            APP_DIR="${{ secrets.AI_GATEWAY_APP_DIR }}"
-            if [ -z "$APP_DIR" ]; then
-              echo "Missing required secret: AI_GATEWAY_APP_DIR" >&2
-              exit 1
-            fi
+            APP_DIR="${{ env.AI_GATEWAY_APP_DIR }}"
             RELEASE_DIR="${APP_DIR}/releases/${{ github.sha }}"
             sudo mkdir -p "$RELEASE_DIR"
             sudo chown -R "${USER}:${USER}" "$APP_DIR"
@@ -83,13 +80,9 @@ jobs:
           port: 22
           script: |
             set -eu
-            APP_DIR="${{ secrets.AI_GATEWAY_APP_DIR }}"
+            APP_DIR="${{ env.AI_GATEWAY_APP_DIR }}"
             ENV_FILE="${{ secrets.AI_GATEWAY_ENV_FILE }}"
             SERVICE_NAME="${{ secrets.AI_GATEWAY_SERVICE_NAME }}"
-            if [ -z "$APP_DIR" ]; then
-              echo "Missing required secret: AI_GATEWAY_APP_DIR" >&2
-              exit 1
-            fi
             if [ -z "$ENV_FILE" ]; then
               echo "Missing required secret: AI_GATEWAY_ENV_FILE" >&2
               exit 1
