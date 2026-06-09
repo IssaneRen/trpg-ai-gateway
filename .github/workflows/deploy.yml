@@ -102,6 +102,17 @@ jobs:
               exit 1
             fi
 
+            if ! command -v node >/dev/null 2>&1; then
+              curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+              sudo apt-get install -y nodejs
+            fi
+            NODE_MAJOR="$(node -p 'Number(process.versions.node.split(".")[0])')"
+            if [ "$NODE_MAJOR" -lt 20 ]; then
+              curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+              sudo apt-get install -y nodejs
+            fi
+            NODE_BIN="$(command -v node)"
+
             sudo tee "/etc/systemd/system/${SERVICE_NAME}.service" > /dev/null <<SYSTEMD
             [Unit]
             Description=TRPG AI Gateway
@@ -110,7 +121,7 @@ jobs:
             [Service]
             WorkingDirectory=${APP_DIR}/current
             EnvironmentFile=${ENV_FILE}
-            ExecStart=/usr/bin/node dist/server.js
+            ExecStart=${NODE_BIN} dist/server.js
             Restart=always
             RestartSec=3
             User=${{ secrets.SERVER_USER }}
