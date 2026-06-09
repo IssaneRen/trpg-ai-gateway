@@ -14,12 +14,30 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   return raw ? JSON.parse(raw) : {};
 }
 
-function writeJson(response: ServerResponse, statusCode: number, payload: unknown) {
+function writeJson(
+  response: ServerResponse,
+  statusCode: number,
+  payload: unknown,
+  headers: Record<string, string> = {}
+) {
   response.writeHead(statusCode, {
     "content-type": "application/json; charset=utf-8",
-    "cache-control": "no-store"
+    "cache-control": "no-store",
+    ...headers
   });
   response.end(JSON.stringify(payload));
+}
+
+function buildCorsHeaders(request: IncomingMessage, allowedOrigin: string): Record<string, string> {
+  const origin = request.headers.origin;
+  if (origin && origin === allowedOrigin) {
+    return {
+      "access-control-allow-origin": origin,
+      "access-control-allow-methods": "POST, GET, OPTIONS",
+      "access-control-allow-headers": "content-type"
+    };
+  }
+  return {};
 }
 
 function validateChatRequest(value: unknown): ChatRequest {
@@ -55,11 +73,19 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig()) {
   const provider = createOpenAiCompatibleProvider(config.ai);
 
   return createServer(async (request, response) => {
+    const corsHeaders = buildCorsHeaders(request, config.allowedOrigin);
+
     try {
       const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
 
+      if (request.method === "OPTIONS") {
+        response.writeHead(204, corsHeaders);
+        response.end();
+        return;
+      }
+
       if (request.method === "GET" && url.pathname === "/health") {
-        writeJson(response, 200, { ok: true });
+        writeJson(response, 200, { ok: true }, corsHeaders);
         return;
       }
 
@@ -79,13 +105,18 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig()) {
           messages: providerRequest.messages,
           temperature: chatRequest.temperature
         });
-        writeJson(response, 200, result);
+        writeJson(response, 200, result, corsHeaders);
         return;
       }
 
-      writeJson(response, 404, { error: "not_found" });
+      writeJson(response, 404, { error: "not_found" }, corsHeaders);
     } catch (error) {
-      writeJson(response, 400, { error: error instanceof Error ? error.message : "unknown error" });
+      writeJson(
+        response,
+        400,
+        { error: error instanceof Error ? error.message : "unknown error" },
+        corsHeaders
+      );
     }
   });
 }
