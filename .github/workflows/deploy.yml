@@ -41,7 +41,6 @@ jobs:
             package.json \
             pnpm-lock.yaml \
             README.md \
-            repo.json \
             dist \
             data \
             skills
