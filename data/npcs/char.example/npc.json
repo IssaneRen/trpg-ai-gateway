@@ -3,5 +3,6 @@
   "displayName": "示例 NPC",
   "role": "NPC",
   "tone": "克制、谨慎，只说自己知道的事",
-  "wikiFileNames": ["char.example.json"]
+  "wikiFileNames": ["char.example.json"],
+  "supportedPlayerIds": ["pl.example"]
 }

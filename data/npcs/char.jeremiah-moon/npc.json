@@ -1,0 +1,20 @@
+{
+  "id": "char.jeremiah-moon",
+  "wikiEntryId": "char.jeremiah-moon",
+  "displayName": "杰里迈亚·沐恩",
+  "summary": "圣彼得教堂墓地旧墓碑上的姓名之一。墓碑异动让他与康斯坦丝一起被重新查阅。",
+  "role": "NPC",
+  "tone": "冷静、压抑、带旧式猎魔人家族的戒备",
+  "wikiFileNames": [
+    "char.jeremiah-moon.json",
+    "report.invite-to-dance-20260607.json"
+  ],
+  "supportedPlayerIds": [
+    "pl.ddd",
+    "pl.leina",
+    "pl.paojiang",
+    "pl.shitoubing",
+    "pl.zote",
+    "pl.lemon"
+  ]
+}

@@ -1,9 +1,17 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { authenticateBearerToken, type AuthSession } from "./auth/tokens.js";
 import { createOpenAiCompatibleProvider } from "./ai/openai-compatible.js";
-import { buildDirectChatRequest } from "./chat/direct-chat.js";
 import { loadRuntimeConfig, type RuntimeConfig } from "./config.js";
+import {
+  appendChatTurn,
+  compressCurrentContextIfNeeded,
+  deleteChatHistory,
+  readChatHistory
+} from "./memory/chat-memory.js";
+import { listNpcProfiles, readNpcProfile } from "./memory/npc-memory.js";
 import { buildNpcPrompt } from "./prompt/prompt-builder.js";
-import type { ChatMessage, ChatRequest } from "./types.js";
+import { KeyedSerialQueue } from "./queue/keyed-queue.js";
+import type { AiProvider, ChatRequest } from "./types.js";
 
 async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -30,11 +38,15 @@ function writeJson(
 
 function buildCorsHeaders(request: IncomingMessage, allowedOrigin: string): Record<string, string> {
   const origin = request.headers.origin;
-  if (origin && origin === allowedOrigin) {
+  const allowedOrigins = allowedOrigin
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (origin && allowedOrigins.includes(origin)) {
     return {
       "access-control-allow-origin": origin,
-      "access-control-allow-methods": "POST, GET, OPTIONS",
-      "access-control-allow-headers": "content-type"
+      "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
+      "access-control-allow-headers": "content-type, authorization"
     };
   }
   return {};
@@ -43,34 +55,67 @@ function buildCorsHeaders(request: IncomingMessage, allowedOrigin: string): Reco
 function validateChatRequest(value: unknown): ChatRequest {
   const candidate = value as Partial<ChatRequest>;
   if (!candidate || typeof candidate !== "object") throw new Error("request body must be JSON");
+  if (typeof candidate.playerId === "string") throw new Error("playerId is not allowed");
+  if (!candidate.npcId || typeof candidate.npcId !== "string") {
+    throw new Error("npcId is required");
+  }
   if (!candidate.message || typeof candidate.message !== "string") {
     throw new Error("message is required");
   }
-  const messages = Array.isArray(candidate.messages)
-    ? candidate.messages.map((message) => {
-        const item = message as Partial<ChatMessage>;
-        if (
-          !item ||
-          (item.role !== "system" && item.role !== "user" && item.role !== "assistant") ||
-          typeof item.content !== "string"
-        ) {
-          throw new Error("messages must contain role/content chat messages");
-        }
-        return { role: item.role, content: item.content };
-      })
-    : undefined;
 
   return {
-    npcId: typeof candidate.npcId === "string" ? candidate.npcId : undefined,
-    playerId: typeof candidate.playerId === "string" ? candidate.playerId : undefined,
+    npcId: candidate.npcId,
     message: candidate.message,
-    messages,
     temperature: typeof candidate.temperature === "number" ? candidate.temperature : undefined
   };
 }
 
-export function createApp(config: RuntimeConfig = loadRuntimeConfig()) {
-  const provider = createOpenAiCompatibleProvider(config.ai);
+function validateNpcIdBody(value: unknown): { npcId: string } {
+  const candidate = value as { npcId?: unknown };
+  if (!candidate || typeof candidate !== "object") throw new Error("request body must be JSON");
+  if (!candidate.npcId || typeof candidate.npcId !== "string") {
+    throw new Error("npcId is required");
+  }
+  return { npcId: candidate.npcId };
+}
+
+function authenticate(request: IncomingMessage, config: RuntimeConfig): AuthSession | undefined {
+  return authenticateBearerToken(
+    request.headers.authorization,
+    config.tokenHashRecords,
+    config.tokenHashPepper,
+    config.supportedPlayerIds
+  );
+}
+
+function requirePlayerSession(session: AuthSession): void {
+  if (session.isKeeper) throw Object.assign(new Error("forbidden"), { statusCode: 403 });
+}
+
+function canAccessNpc(session: AuthSession, supportedPlayerIds: string[] | undefined): boolean {
+  return session.isKeeper || !supportedPlayerIds || supportedPlayerIds.includes(session.playerId);
+}
+
+async function requireNpcAccess(config: RuntimeConfig, session: AuthSession, npcId: string): Promise<void> {
+  const profile = await readNpcProfile(config.npcRootDir, npcId);
+  if (!canAccessNpc(session, profile.supportedPlayerIds)) {
+    throw Object.assign(new Error("forbidden"), { statusCode: 403 });
+  }
+}
+
+function queueKey(npcId: string, playerId: string): string {
+  return `${npcId}\0${playerId}`;
+}
+
+export interface CreateAppOptions {
+  provider?: AiProvider;
+  now?: () => Date;
+}
+
+export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: CreateAppOptions = {}) {
+  const provider = options.provider ?? createOpenAiCompatibleProvider(config.ai);
+  const now = options.now ?? (() => new Date());
+  const queue = new KeyedSerialQueue();
 
   return createServer(async (request, response) => {
     const corsHeaders = buildCorsHeaders(request, config.allowedOrigin);
@@ -89,32 +134,139 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig()) {
         return;
       }
 
+      if (request.method === "POST" && url.pathname === "/api/session") {
+        const session = authenticate(request, config);
+        if (!session) {
+          writeJson(response, 401, { error: "unauthorized" }, corsHeaders);
+          return;
+        }
+        writeJson(response, 200, session, corsHeaders);
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/npcs") {
+        const session = authenticate(request, config);
+        if (!session) {
+          writeJson(response, 401, { error: "unauthorized" }, corsHeaders);
+          return;
+        }
+        const profiles = await listNpcProfiles(config.npcRootDir);
+        const visibleProfiles = profiles.filter((profile) =>
+          canAccessNpc(session, profile.supportedPlayerIds)
+        );
+        writeJson(
+          response,
+          200,
+          {
+            npcs: visibleProfiles.map((profile) => ({
+              id: profile.id,
+              displayName: profile.displayName,
+              summary: profile.summary,
+              role: profile.role,
+              tone: profile.tone
+            }))
+          },
+          corsHeaders
+        );
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/chat/history") {
+        const session = authenticate(request, config);
+        if (!session) {
+          writeJson(response, 401, { error: "unauthorized" }, corsHeaders);
+          return;
+        }
+        requirePlayerSession(session);
+        const npcId = url.searchParams.get("npcId");
+        if (!npcId) throw new Error("npcId is required");
+        await requireNpcAccess(config, session, npcId);
+        const parsedLimit = Number(url.searchParams.get("limit") ?? "100");
+        const messages = await readChatHistory(
+          config.chatMemoryRootDir,
+          npcId,
+          session.playerId,
+          Number.isFinite(parsedLimit) ? parsedLimit : 100
+        );
+        writeJson(response, 200, { messages }, corsHeaders);
+        return;
+      }
+
       if (request.method === "POST" && url.pathname === "/api/chat") {
+        const session = authenticate(request, config);
+        if (!session) {
+          writeJson(response, 401, { error: "unauthorized" }, corsHeaders);
+          return;
+        }
+        requirePlayerSession(session);
         const chatRequest = validateChatRequest(await readJsonBody(request));
-        const providerRequest =
-          chatRequest.npcId && chatRequest.playerId
-            ? await buildNpcPrompt({
-                npcId: chatRequest.npcId,
-                playerId: chatRequest.playerId,
-                userMessage: chatRequest.message,
-                wikiEntriesDir: config.wikiEntriesDir,
-                npcRootDir: config.npcRootDir
-              })
-            : buildDirectChatRequest(chatRequest);
-        const result = await provider.chat({
-          messages: providerRequest.messages,
-          temperature: chatRequest.temperature
+        await requireNpcAccess(config, session, chatRequest.npcId!);
+        const result = await queue.run(queueKey(chatRequest.npcId!, session.playerId), async () => {
+          await compressCurrentContextIfNeeded(
+            config.chatMemoryRootDir,
+            chatRequest.npcId!,
+            session.playerId,
+            provider
+          );
+          const providerRequest = await buildNpcPrompt({
+            npcId: chatRequest.npcId!,
+            playerId: session.playerId,
+            userMessage: chatRequest.message,
+            wikiEntriesDir: config.wikiEntriesDir,
+            npcRootDir: config.npcRootDir,
+            chatMemoryRootDir: config.chatMemoryRootDir
+          });
+          const chatResult = await provider.chat({
+            messages: providerRequest.messages,
+            temperature: chatRequest.temperature
+          });
+          await appendChatTurn(
+            config.chatMemoryRootDir,
+            chatRequest.npcId!,
+            session.playerId,
+            chatRequest.message,
+            chatResult.content,
+            now()
+          );
+          return chatResult;
         });
         writeJson(response, 200, result, corsHeaders);
         return;
       }
 
+      if (request.method === "DELETE" && url.pathname === "/api/chat/history") {
+        const session = authenticate(request, config);
+        if (!session) {
+          writeJson(response, 401, { error: "unauthorized" }, corsHeaders);
+          return;
+        }
+        requirePlayerSession(session);
+        const { npcId } = validateNpcIdBody(await readJsonBody(request));
+        await requireNpcAccess(config, session, npcId);
+        const result = await queue.run(queueKey(npcId, session.playerId), () =>
+          deleteChatHistory(config.chatMemoryRootDir, npcId, session.playerId, now())
+        );
+        writeJson(response, 200, { ok: true, ...result }, corsHeaders);
+        return;
+      }
+
       writeJson(response, 404, { error: "not_found" }, corsHeaders);
     } catch (error) {
+      const statusCode =
+        error instanceof Error && "statusCode" in error
+          ? Number((error as Error & { statusCode: number }).statusCode)
+          : 400;
       writeJson(
         response,
-        400,
-        { error: error instanceof Error ? error.message : "unknown error" },
+        statusCode,
+        {
+          error:
+            statusCode === 403
+              ? "forbidden"
+              : error instanceof Error
+                ? error.message
+                : "unknown error"
+        },
         corsHeaders
       );
     }

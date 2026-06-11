@@ -1,0 +1,44 @@
+[
+  {
+    "playerId": "pl.ddd",
+    "displayName": "DDD",
+    "isKeeper": false,
+    "tokenHash": "e126f5f0ece56e309235e2a903405ac83aa29bb78515aee6f80e3f3e547fef77"
+  },
+  {
+    "playerId": "pl.leina",
+    "displayName": "莱纳",
+    "isKeeper": false,
+    "tokenHash": "a7ebf72f9f47e9b3eca1ec98d5fcffa0074a7e3743cab8f77ded8f36c7821123"
+  },
+  {
+    "playerId": "pl.paojiang",
+    "displayName": "狍酱",
+    "isKeeper": false,
+    "tokenHash": "1597bd41e6aa8b1cbd07863276e4db6cc8b5f19f4f39c2df5ad1e93ec14e4148"
+  },
+  {
+    "playerId": "pl.shitoubing",
+    "displayName": "石头饼",
+    "isKeeper": false,
+    "tokenHash": "5deab9b6b2fcba2ed57c44f1aae7132c1b8c82822a63777acf162e8f4c364527"
+  },
+  {
+    "playerId": "pl.zote",
+    "displayName": "Zote",
+    "isKeeper": false,
+    "tokenHash": "81ac5537b1092d661ebeb397d0186316ed8a5f48bd5a64eb49b00b2eec530c4b"
+  },
+  {
+    "playerId": "pl.lemon",
+    "displayName": "柠檬",
+    "isKeeper": false,
+    "tokenHash": "ccb3633a0fe0968c1d0038079a625aeeb4e233d177671e1596a8d14b213f8615"
+  },
+  {
+    "playerId": "kp",
+    "displayName": "kp大人",
+    "isKeeper": true,
+    "tokenHash": "a90d9b8b0316a799ff6dab1509af362ad70a6a181dc64a3d3a1f7c1ba976fd0b"
+  }
+]

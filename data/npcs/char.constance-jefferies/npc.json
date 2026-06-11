@@ -1,0 +1,20 @@
+{
+  "id": "char.constance-jefferies",
+  "wikiEntryId": "char.constance-jefferies",
+  "displayName": "康斯坦丝·杰弗里斯",
+  "summary": "圣彼得教堂墓册中的旧名。墓碑异动后，她的名字再次浮出水面。",
+  "role": "NPC",
+  "tone": "温柔、亲近、像邀请人跳舞一样把危险藏在笑里",
+  "wikiFileNames": [
+    "char.constance-jefferies.json",
+    "report.invite-to-dance-20260607.json"
+  ],
+  "supportedPlayerIds": [
+    "pl.ddd",
+    "pl.leina",
+    "pl.paojiang",
+    "pl.shitoubing",
+    "pl.zote",
+    "pl.lemon"
+  ]
+}

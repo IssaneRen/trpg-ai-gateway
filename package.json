@@ -11,6 +11,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "test": "vitest run",
+    "generate-token-hashes": "node scripts/generate-token-hashes.mjs",
     "type-check": "tsc --noEmit"
   },
   "dependencies": {},
