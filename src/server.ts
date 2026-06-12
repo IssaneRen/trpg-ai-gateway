@@ -161,6 +161,7 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
             npcs: visibleProfiles.map((profile) => ({
               id: profile.id,
               displayName: profile.displayName,
+              avatarUrl: profile.avatarUrl,
               summary: profile.summary,
               role: profile.role,
               tone: profile.tone

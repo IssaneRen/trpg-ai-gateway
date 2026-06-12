@@ -8,6 +8,7 @@ export interface NpcProfile {
   role?: string;
   tone?: string;
   summary?: string;
+  avatarUrl?: string;
   wikiEntryId?: string;
   wikiFileNames?: string[];
   supportedPlayerIds?: string[];
