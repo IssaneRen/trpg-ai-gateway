@@ -40,5 +40,11 @@
     "displayName": "kp大人",
     "isKeeper": true,
     "tokenHash": "a90d9b8b0316a799ff6dab1509af362ad70a6a181dc64a3d3a1f7c1ba976fd0b"
+  },
+  {
+    "playerId": "pl.xxt",
+    "displayName": "xxt",
+    "isKeeper": false,
+    "tokenHash": "3a2077d863b59e43248b1bf90c3db0b6e429eb1af804326671dbc304e6c085cf"
   }
 ]
