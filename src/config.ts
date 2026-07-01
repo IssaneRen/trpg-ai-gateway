@@ -20,6 +20,7 @@ export interface RuntimeConfig {
 
 interface LocalConfigFile {
   port?: number;
+  allowedOrigin?: string;
   wikiEntriesDir?: string;
   npcRootDir?: string;
   chatMemoryRootDir?: string;
@@ -68,7 +69,7 @@ export function loadRuntimeConfig(): RuntimeConfig {
 
   return {
     port: Number(requireValue(process.env.PORT ?? localPort, "PORT")),
-    allowedOrigin: requireValue(process.env.ALLOWED_ORIGIN, "ALLOWED_ORIGIN"),
+    allowedOrigin: requireValue(process.env.ALLOWED_ORIGIN ?? local.allowedOrigin, "ALLOWED_ORIGIN"),
     wikiEntriesDir: resolve(requireValue(process.env.WIKI_ENTRIES_DIR ?? local.wikiEntriesDir, "WIKI_ENTRIES_DIR")),
     npcRootDir: resolve(requireValue(process.env.NPC_ROOT_DIR ?? local.npcRootDir, "NPC_ROOT_DIR")),
     chatMemoryRootDir: resolve(
