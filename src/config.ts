@@ -8,6 +8,8 @@ export interface RuntimeConfig {
   wikiEntriesDir: string;
   npcRootDir: string;
   chatMemoryRootDir: string;
+  moduleClueContentRootDir: string;
+  moduleClueVisibilityRootDir: string;
   tokenHashPepper: string;
   supportedPlayerIds: string[];
   tokenHashRecords: TokenHashRecord[];
@@ -24,6 +26,9 @@ interface LocalConfigFile {
   wikiEntriesDir?: string;
   npcRootDir?: string;
   chatMemoryRootDir?: string;
+  moduleClueRootDir?: string;
+  moduleClueContentRootDir?: string;
+  moduleClueVisibilityRootDir?: string;
   tokenHashFile?: string;
   supportedPlayerIds?: string[];
   ai?: {
@@ -54,14 +59,20 @@ function splitCsv(value: string | undefined): string[] {
     .filter(Boolean);
 }
 
+function isDevAuthBypassEnabled(): boolean {
+  return process.env.DEV_AUTH_BYPASS === "1" && process.env.NODE_ENV !== "production";
+}
+
 export function loadRuntimeConfig(): RuntimeConfig {
   const local = readLocalConfig();
+  const devAuthBypassEnabled = isDevAuthBypassEnabled();
   const apiKeyEnv = requireValue(local.ai?.apiKeyEnv ?? process.env.AI_API_KEY_ENV, "AI_API_KEY_ENV");
   const localPort = local.port === undefined ? undefined : String(local.port);
   const tokenHashFile = resolve(
     process.env.TOKEN_HASH_FILE ?? local.tokenHashFile ?? "data/auth/token-hashes.json"
   );
   const tokenHashRecords = readTokenHashRecords(tokenHashFile);
+  const legacyModuleClueRootDir = process.env.MODULE_CLUE_ROOT_DIR ?? local.moduleClueRootDir;
   const supportedPlayerIds =
     splitCsv(process.env.SUPPORTED_PLAYER_IDS).length > 0
       ? splitCsv(process.env.SUPPORTED_PLAYER_IDS)
@@ -78,13 +89,29 @@ export function loadRuntimeConfig(): RuntimeConfig {
         "CHAT_MEMORY_ROOT_DIR"
       )
     ),
-    tokenHashPepper: requireValue(process.env.TOKEN_HASH_PEPPER, "TOKEN_HASH_PEPPER"),
+    moduleClueContentRootDir: resolve(
+      requireValue(
+        process.env.MODULE_CLUE_CONTENT_ROOT_DIR ?? local.moduleClueContentRootDir ?? legacyModuleClueRootDir,
+        "MODULE_CLUE_CONTENT_ROOT_DIR"
+      )
+    ),
+    moduleClueVisibilityRootDir: resolve(
+      requireValue(
+        process.env.MODULE_CLUE_VISIBILITY_ROOT_DIR ?? local.moduleClueVisibilityRootDir ?? legacyModuleClueRootDir,
+        "MODULE_CLUE_VISIBILITY_ROOT_DIR"
+      )
+    ),
+    tokenHashPepper: devAuthBypassEnabled
+      ? process.env.TOKEN_HASH_PEPPER ?? "dev-auth-bypass-pepper"
+      : requireValue(process.env.TOKEN_HASH_PEPPER, "TOKEN_HASH_PEPPER"),
     supportedPlayerIds,
     tokenHashRecords,
     ai: {
       baseUrl: requireValue(process.env.AI_BASE_URL ?? local.ai?.baseUrl, "AI_BASE_URL"),
       model: requireValue(process.env.AI_MODEL ?? local.ai?.model, "AI_MODEL"),
-      apiKey: requireValue(process.env[apiKeyEnv], apiKeyEnv)
+      apiKey: devAuthBypassEnabled
+        ? process.env[apiKeyEnv] ?? "dev-auth-bypass-api-key"
+        : requireValue(process.env[apiKeyEnv], apiKeyEnv)
     }
   };
 }

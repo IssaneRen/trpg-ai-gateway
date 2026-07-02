@@ -8,6 +8,11 @@ import {
   deleteChatHistory,
   readChatHistory
 } from "./memory/chat-memory.js";
+import {
+  readModuleCluePayload,
+  updateModuleClueVisibility,
+  validateVisibilityUpdateBody
+} from "./memory/module-clue-memory.js";
 import { listNpcProfiles, readNpcProfile } from "./memory/npc-memory.js";
 import { buildNpcPrompt } from "./prompt/prompt-builder.js";
 import { KeyedSerialQueue } from "./queue/keyed-queue.js";
@@ -45,7 +50,7 @@ function buildCorsHeaders(request: IncomingMessage, allowedOrigin: string): Reco
   if (origin && allowedOrigins.includes(origin)) {
     return {
       "access-control-allow-origin": origin,
-      "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
+      "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
       "access-control-allow-headers": "content-type, authorization"
     };
   }
@@ -92,6 +97,10 @@ function requirePlayerSession(session: AuthSession): void {
   if (session.isKeeper) throw Object.assign(new Error("forbidden"), { statusCode: 403 });
 }
 
+function requireKeeperSession(session: AuthSession): void {
+  if (!session.isKeeper) throw Object.assign(new Error("forbidden"), { statusCode: 403 });
+}
+
 function canAccessNpc(session: AuthSession, supportedPlayerIds: string[] | undefined): boolean {
   return session.isKeeper || !supportedPlayerIds || supportedPlayerIds.includes(session.playerId);
 }
@@ -105,6 +114,16 @@ async function requireNpcAccess(config: RuntimeConfig, session: AuthSession, npc
 
 function queueKey(npcId: string, playerId: string): string {
   return `${npcId}\0${playerId}`;
+}
+
+function decodeRouteSegment(value: string): string {
+  return decodeURIComponent(value);
+}
+
+function playerDirectory(config: RuntimeConfig) {
+  return config.tokenHashRecords
+    .filter((record) => !record.isKeeper)
+    .map((record) => ({ id: record.playerId, name: record.displayName }));
 }
 
 export interface CreateAppOptions {
@@ -122,6 +141,7 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
 
     try {
       const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
+      const rawPath = (request.url ?? "/").split(/[?#]/)[0];
 
       if (request.method === "OPTIONS") {
         response.writeHead(204, corsHeaders);
@@ -169,6 +189,49 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
           },
           corsHeaders
         );
+        return;
+      }
+
+      const moduleClueMatch = rawPath.match(/^\/api\/module-clues\/([^/]+)$/);
+      if (request.method === "GET" && moduleClueMatch) {
+        const session = authenticate(request, config);
+        if (!session) {
+          writeJson(response, 401, { error: "unauthorized" }, corsHeaders);
+          return;
+        }
+        const payload = await readModuleCluePayload(
+          config.moduleClueContentRootDir,
+          config.moduleClueVisibilityRootDir,
+          decodeRouteSegment(moduleClueMatch[1]),
+          session,
+          playerDirectory(config)
+        );
+        writeJson(response, 200, payload, corsHeaders);
+        return;
+      }
+
+      const moduleClueVisibilityMatch = rawPath.match(
+        /^\/api\/module-clues\/([^/]+)\/visibility\/([^/]+)$/
+      );
+      if (request.method === "PUT" && moduleClueVisibilityMatch) {
+        const session = authenticate(request, config);
+        if (!session) {
+          writeJson(response, 401, { error: "unauthorized" }, corsHeaders);
+          return;
+        }
+        requireKeeperSession(session);
+        const { playerIds } = validateVisibilityUpdateBody(
+          await readJsonBody(request),
+          config.supportedPlayerIds
+        );
+        await updateModuleClueVisibility(
+          config.moduleClueContentRootDir,
+          config.moduleClueVisibilityRootDir,
+          decodeRouteSegment(moduleClueVisibilityMatch[1]),
+          decodeRouteSegment(moduleClueVisibilityMatch[2]),
+          playerIds
+        );
+        writeJson(response, 200, { ok: true }, corsHeaders);
         return;
       }
 

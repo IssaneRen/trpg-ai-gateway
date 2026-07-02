@@ -15,6 +15,10 @@ export interface AuthSession {
 
 const SHA256_HEX_LENGTH = 64;
 
+function isDevAuthBypassEnabled(): boolean {
+  return process.env.DEV_AUTH_BYPASS === "1" && process.env.NODE_ENV !== "production";
+}
+
 export function hashToken(token: string, pepper: string): string {
   return createHash("sha256").update(pepper).update("\0").update(token).digest("hex");
 }
@@ -41,6 +45,14 @@ export function authenticateBearerToken(
 ): AuthSession | undefined {
   const token = parseBearerToken(authorization);
   if (!token) return undefined;
+
+  if (isDevAuthBypassEnabled()) {
+    return {
+      playerId: process.env.DEV_PLAYER_ID || "pl.ddd",
+      displayName: process.env.DEV_PLAYER_NAME || "本地调试 PL",
+      isKeeper: process.env.DEV_IS_KEEPER === "1"
+    };
+  }
 
   const candidateHash = hashToken(token, pepper);
   const supported = new Set(supportedPlayerIds);

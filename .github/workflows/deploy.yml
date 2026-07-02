@@ -59,6 +59,7 @@ jobs:
             APP_DIR="${{ env.AI_GATEWAY_APP_DIR }}"
             RELEASE_DIR="${APP_DIR}/releases/${{ github.sha }}"
             sudo mkdir -p "$RELEASE_DIR"
+            sudo mkdir -p "${APP_DIR}/shared/module-clue-visibility"
             sudo chown -R "${USER}:${USER}" "$APP_DIR"
 
       - name: Upload release package
@@ -122,6 +123,8 @@ jobs:
             [Service]
             WorkingDirectory=${APP_DIR}/current
             EnvironmentFile=${ENV_FILE}
+            Environment=MODULE_CLUE_CONTENT_ROOT_DIR=${APP_DIR}/current/data/module-clues
+            Environment=MODULE_CLUE_VISIBILITY_ROOT_DIR=${APP_DIR}/shared/module-clue-visibility
             ExecStart=${NODE_BIN} dist/server.js
             Restart=always
             RestartSec=3

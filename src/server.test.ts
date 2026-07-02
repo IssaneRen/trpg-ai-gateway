@@ -14,6 +14,8 @@ const config: RuntimeConfig = {
   wikiEntriesDir: "/unused",
   npcRootDir: "/unused",
   chatMemoryRootDir: "/unused",
+  moduleClueContentRootDir: "/unused",
+  moduleClueVisibilityRootDir: "/unused",
   tokenHashPepper: "test-pepper",
   supportedPlayerIds: ["pl.cici"],
   tokenHashRecords: [],
@@ -55,11 +57,15 @@ function createFixture(overrides: Partial<RuntimeConfig> = {}) {
   const wikiEntriesDir = join(root, "wiki");
   const npcRootDir = join(root, "npcs");
   const chatMemoryRootDir = join(root, "chat-memory");
+  const moduleClueContentRootDir = join(root, "module-clue-content");
+  const moduleClueVisibilityRootDir = join(root, "module-clue-visibility");
   const npcDir = join(npcRootDir, "char.claire");
   mkdirSync(wikiEntriesDir, { recursive: true });
   mkdirSync(join(npcDir, "players"), { recursive: true });
   mkdirSync(join(chatMemoryRootDir, "char.claire", "players", "pl.cici"), { recursive: true });
   mkdirSync(join(chatMemoryRootDir, "char.claire", "players", "pl.leina"), { recursive: true });
+  mkdirSync(join(moduleClueContentRootDir, "naimen-prologue"), { recursive: true });
+  mkdirSync(join(moduleClueVisibilityRootDir, "naimen-prologue"), { recursive: true });
   writeFileSync(
     join(npcDir, "npc.json"),
     JSON.stringify(
@@ -93,12 +99,71 @@ function createFixture(overrides: Partial<RuntimeConfig> = {}) {
     join(npcDir, "ai-context.json"),
     JSON.stringify({ privateDirective: "AI 私有上下文" }, null, 2)
   );
+  writeFileSync(
+    join(moduleClueContentRootDir, "naimen-prologue", "clues.json"),
+    JSON.stringify(
+      {
+        moduleId: "naimen-prologue",
+        moduleName: "奈面序章",
+        clues: [
+          {
+            id: "arrival",
+            title: "抵达奈面町",
+            summary: "一切记录从抵达开始。",
+            detail: "公开给 Cici 的抵达记录。",
+            tags: ["序章"],
+            thumbnail: "/wiki/images/naimen/arrival.jpg",
+            order: 1,
+            reveals: ["hidden-letter", "station-clock"]
+          },
+          {
+            id: "hidden-letter",
+            title: "不可见的密信",
+            summary: "莱纳才能看到的密信摘要。",
+            detail: "这段内容不应该出现在 Cici 的响应里。",
+            tags: ["密信"],
+            thumbnail: "/wiki/images/naimen/letter.jpg",
+            order: 2,
+            reveals: ["station-clock"]
+          },
+          {
+            id: "station-clock",
+            title: "停摆的站钟",
+            summary: "站钟停在同一个时刻。",
+            detail: "Cici 可以看到的站钟细节。",
+            tags: ["时间"],
+            order: 3,
+            reveals: []
+          }
+        ]
+      },
+      null,
+      2
+    )
+  );
+  writeFileSync(
+    join(moduleClueVisibilityRootDir, "naimen-prologue", "visibility.json"),
+    JSON.stringify(
+      {
+        version: 1,
+        clues: {
+          arrival: ["pl.cici"],
+          "hidden-letter": ["pl.leina"],
+          "station-clock": ["pl.cici"]
+        }
+      },
+      null,
+      2
+    )
+  );
 
   const runtimeConfig: RuntimeConfig = {
     ...config,
     wikiEntriesDir,
     npcRootDir,
     chatMemoryRootDir,
+    moduleClueContentRootDir,
+    moduleClueVisibilityRootDir,
     supportedPlayerIds: ["pl.cici", "pl.leina"],
     tokenHashRecords: [
       tokenRecord("cici-token", "pl.cici", "Cici"),
@@ -108,7 +173,14 @@ function createFixture(overrides: Partial<RuntimeConfig> = {}) {
     ...overrides
   };
 
-  return { root, npcRootDir, chatMemoryRootDir, config: runtimeConfig };
+  return {
+    root,
+    npcRootDir,
+    chatMemoryRootDir,
+    moduleClueContentRootDir,
+    moduleClueVisibilityRootDir,
+    config: runtimeConfig
+  };
 }
 
 async function withServer<T>(
@@ -144,7 +216,7 @@ describe("createApp CORS", () => {
 
     expect(response.status).toBe(204);
     expect(response.headers.get("access-control-allow-origin")).toBe("https://main.example.com");
-    expect(response.headers.get("access-control-allow-methods")).toBe("GET, POST, DELETE, OPTIONS");
+    expect(response.headers.get("access-control-allow-methods")).toBe("GET, POST, PUT, DELETE, OPTIONS");
     expect(response.headers.get("access-control-allow-headers")).toBe("content-type, authorization");
     await new Promise<void>((resolve) => app.close(() => resolve()));
   });
@@ -169,6 +241,141 @@ describe("createApp CORS", () => {
     expect(response.status).toBe(204);
     expect(response.headers.get("access-control-allow-origin")).toBe("https://www.issane.cn");
     await new Promise<void>((resolve) => app.close(() => resolve()));
+  });
+});
+
+describe("createApp module clue APIs", () => {
+  it("filters clue payload and tags to the bearer player's visible clues", async () => {
+    const fixture = createFixture();
+    await withServer(fixture.config, new FakeProvider(), async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/module-clues/naimen-prologue`, {
+        headers: { authorization: "Bearer cici-token" }
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.module).toEqual({ id: "naimen-prologue", name: "奈面序章" });
+      expect(body.clues.map((clue: { id: string }) => clue.id)).toEqual([
+        "arrival",
+        "station-clock"
+      ]);
+      expect(body.edges).toEqual([{ id: "arrival->station-clock", source: "arrival", target: "station-clock" }]);
+      expect(body.tags).toEqual(["序章", "时间"]);
+      expect(JSON.stringify(body)).not.toContain("不可见的密信");
+      expect(JSON.stringify(body)).not.toContain("莱纳才能看到");
+      expect(JSON.stringify(body)).not.toContain("这段内容不应该出现在 Cici");
+      expect(JSON.stringify(body)).not.toContain("密信");
+      expect(JSON.stringify(body)).not.toContain("letter.jpg");
+    });
+  });
+
+  it("returns all clue payload and visibility metadata to keeper tokens", async () => {
+    const fixture = createFixture();
+    await withServer(fixture.config, new FakeProvider(), async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/module-clues/naimen-prologue`, {
+        headers: { authorization: `Bearer ${keeperToken}` }
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.clues.map((clue: { id: string }) => clue.id)).toEqual([
+        "arrival",
+        "hidden-letter",
+        "station-clock"
+      ]);
+      expect(body.clues.find((clue: { id: string }) => clue.id === "hidden-letter").visiblePlayerIds).toEqual(["pl.leina"]);
+      expect(body.tags).toEqual(["序章", "密信", "时间"]);
+    });
+  });
+
+  it("lets keeper tokens update clue visibility and rejects player tokens", async () => {
+    const fixture = createFixture();
+    await withServer(fixture.config, new FakeProvider(), async (baseUrl) => {
+      const playerUpdate = await fetch(`${baseUrl}/api/module-clues/naimen-prologue/visibility/hidden-letter`, {
+        method: "PUT",
+        headers: { authorization: "Bearer cici-token", "content-type": "application/json" },
+        body: JSON.stringify({ playerIds: ["pl.cici"] })
+      });
+      expect(playerUpdate.status).toBe(403);
+
+      const keeperUpdate = await fetch(`${baseUrl}/api/module-clues/naimen-prologue/visibility/hidden-letter`, {
+        method: "PUT",
+        headers: { authorization: `Bearer ${keeperToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ playerIds: ["pl.cici"] })
+      });
+      expect(keeperUpdate.status).toBe(200);
+      expect(await keeperUpdate.json()).toEqual({ ok: true });
+
+      const refreshed = await fetch(`${baseUrl}/api/module-clues/naimen-prologue`, {
+        headers: { authorization: "Bearer cici-token" }
+      });
+      const body = await refreshed.json();
+      expect(body.clues.map((clue: { id: string }) => clue.id)).toEqual([
+        "arrival",
+        "hidden-letter",
+        "station-clock"
+      ]);
+    });
+  });
+
+  it("writes keeper visibility updates only to the visibility root", async () => {
+    const fixture = createFixture();
+    await withServer(fixture.config, new FakeProvider(), async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/module-clues/naimen-prologue/visibility/hidden-letter`, {
+        method: "PUT",
+        headers: { authorization: `Bearer ${keeperToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ playerIds: ["pl.cici"] })
+      });
+
+      expect(response.status).toBe(200);
+      const visibility = JSON.parse(
+        await readFile(join(fixture.moduleClueVisibilityRootDir, "naimen-prologue", "visibility.json"), "utf-8")
+      );
+      expect(visibility.clues["hidden-letter"]).toEqual(["pl.cici"]);
+      await expect(
+        readFile(join(fixture.moduleClueContentRootDir, "naimen-prologue", "visibility.json"), "utf-8")
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
+  it("rejects unsafe module and clue path segments", async () => {
+    const fixture = createFixture();
+    await withServer(fixture.config, new FakeProvider(), async (baseUrl) => {
+      for (const moduleId of ["%252E", "%252E%252E", "..%2Fx", "x%2Fy", "x%5Cy"]) {
+        const response = await fetch(`${baseUrl}/api/module-clues/${moduleId}`, {
+          headers: { authorization: "Bearer cici-token" }
+        });
+        expect(response.status).toBe(400);
+      }
+
+      for (const clueId of ["%252E", "%252E%252E", "..%2Fx", "x%2Fy", "x%5Cy"]) {
+        const response = await fetch(`${baseUrl}/api/module-clues/naimen-prologue/visibility/${clueId}`, {
+          method: "PUT",
+          headers: { authorization: `Bearer ${keeperToken}`, "content-type": "application/json" },
+          body: JSON.stringify({ playerIds: ["pl.cici"] })
+        });
+        expect(response.status).toBe(400);
+      }
+    });
+  });
+
+  it("rejects unknown playerIds and client-submitted playerId in visibility updates", async () => {
+    const fixture = createFixture();
+    await withServer(fixture.config, new FakeProvider(), async (baseUrl) => {
+      const unknownPlayer = await fetch(`${baseUrl}/api/module-clues/naimen-prologue/visibility/arrival`, {
+        method: "PUT",
+        headers: { authorization: `Bearer ${keeperToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ playerIds: ["pl.unknown"] })
+      });
+      expect(unknownPlayer.status).toBe(400);
+
+      const spoofedIdentity = await fetch(`${baseUrl}/api/module-clues/naimen-prologue/visibility/arrival`, {
+        method: "PUT",
+        headers: { authorization: `Bearer ${keeperToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ playerId: "pl.cici", playerIds: ["pl.cici"] })
+      });
+      expect(spoofedIdentity.status).toBe(400);
+    });
   });
 });
 

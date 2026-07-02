@@ -1,5 +1,5 @@
 export function assertSafeSegment(value: string, label: string): string {
-  if (!/^[a-zA-Z0-9._-]+$/.test(value)) {
+  if (!value || value === "." || value === ".." || !/^[a-zA-Z0-9._-]+$/.test(value)) {
     throw new Error(`${label} contains unsupported characters`);
   }
   return value;

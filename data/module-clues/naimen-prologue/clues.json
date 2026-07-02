@@ -1,0 +1,60 @@
+{
+  "moduleId": "naimen-prologue",
+  "moduleName": "奈面序章",
+  "clues": [
+    {
+      "id": "arrival-record",
+      "title": "抵达奈面町",
+      "summary": "列车驶入终点站时，站台钟声与车厢广播并不同步。",
+      "detail": "记录从抵达奈面町开始。站台旧钟停在 18:17，而列车广播仍宣称当前时间为 18:05。站务员对此避而不谈，只催促外来者尽快离站。",
+      "tags": ["序章", "车站"],
+      "order": 1,
+      "reveals": ["station-clock", "missing-luggage"]
+    },
+    {
+      "id": "station-clock",
+      "title": "停摆的站钟",
+      "summary": "站钟停在 18:17，钟面玻璃内侧留有水痕。",
+      "detail": "钟面不像自然故障。玻璃内侧有细密水痕，边缘残留一圈浅灰色粉末，像是被人从内部短暂打开过。",
+      "tags": ["时间", "车站"],
+      "order": 2,
+      "reveals": ["old-town-map"]
+    },
+    {
+      "id": "missing-luggage",
+      "title": "遗失的黑色提箱",
+      "summary": "行李寄存处登记了一只无人领取的黑色提箱。",
+      "detail": "提箱登记在抵达前一天，寄存人姓名被墨水涂去。寄存票背面写着旅馆旧址的门牌号。",
+      "tags": ["物证"],
+      "order": 3,
+      "reveals": ["old-town-map", "hotel-ledger"]
+    },
+    {
+      "id": "old-town-map",
+      "title": "旧町区地图",
+      "summary": "地图标出了如今不存在的旧旅馆和通往海岸的窄路。",
+      "detail": "地图纸张很新，却印着十年前已拆除的街区。旧旅馆位置被红铅笔圈出，旁边写着“潮落后再去”。",
+      "tags": ["地点"],
+      "order": 4,
+      "reveals": ["hotel-ledger", "shoreline-path"]
+    },
+    {
+      "id": "hotel-ledger",
+      "title": "旅馆登记簿残页",
+      "summary": "残页记录了一批重复出现的住客姓名。",
+      "detail": "同一批姓名在不同年份反复入住，笔迹却始终一致。最后一行只留下房号和一个被撕去的姓氏。",
+      "tags": ["人物", "文书"],
+      "order": 5,
+      "reveals": ["shoreline-path"]
+    },
+    {
+      "id": "shoreline-path",
+      "title": "通往海岸的窄路",
+      "summary": "旧地图、登记簿和站钟记录都指向同一条海岸小路。",
+      "detail": "窄路在潮落后露出，路面嵌着旧旅馆同款地砖。所有前置线索最终都把调查推向这条路。",
+      "tags": ["地点", "结论"],
+      "order": 6,
+      "reveals": []
+    }
+  ]
+}
