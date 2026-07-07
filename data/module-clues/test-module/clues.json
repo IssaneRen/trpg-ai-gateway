@@ -1,0 +1,25 @@
+{
+  "moduleId": "test-module",
+  "moduleName": "测试模组",
+  "clues": [
+    {
+      "id": "test-start",
+      "title": "测试入口线索",
+      "summary": "用于确认模组切换时画布会重新加载。",
+      "detail": "这是一条测试模组的起始线索。它只用于本地验证模组列表、切换、详情弹窗和后续高亮逻辑。",
+      "tags": ["测试", "入口"],
+      "order": 1,
+      "isInitial": true,
+      "reveals": ["test-followup"]
+    },
+    {
+      "id": "test-followup",
+      "title": "测试后续线索",
+      "summary": "用于确认横向推导和高亮路径正常。",
+      "detail": "如果从测试入口线索能高亮到这里，说明当前模组的数据、边和点击状态都已切换到测试模组。",
+      "tags": ["测试", "后续"],
+      "order": 2,
+      "reveals": []
+    }
+  ]
+}

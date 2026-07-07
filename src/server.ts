@@ -9,6 +9,7 @@ import {
   readChatHistory
 } from "./memory/chat-memory.js";
 import {
+  listModuleClueSummaries,
   readModuleCluePayload,
   updateModuleClueVisibility,
   validateVisibilityUpdateBody
@@ -121,8 +122,9 @@ function decodeRouteSegment(value: string): string {
 }
 
 function playerDirectory(config: RuntimeConfig) {
+  const supportedPlayerIds = new Set(config.supportedPlayerIds);
   return config.tokenHashRecords
-    .filter((record) => !record.isKeeper)
+    .filter((record) => !record.isKeeper && supportedPlayerIds.has(record.playerId))
     .map((record) => ({ id: record.playerId, name: record.displayName }));
 }
 
@@ -192,6 +194,22 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
         return;
       }
 
+      if (request.method === "GET" && url.pathname === "/api/module-clues") {
+        const session = authenticate(request, config);
+        if (!session) {
+          writeJson(response, 401, { error: "unauthorized" }, corsHeaders);
+          return;
+        }
+        const modules = await listModuleClueSummaries(
+          config.moduleClueContentRootDir,
+          config.moduleClueVisibilityRootDir,
+          config.supportedPlayerIds,
+          session
+        );
+        writeJson(response, 200, { modules }, corsHeaders);
+        return;
+      }
+
       const moduleClueMatch = rawPath.match(/^\/api\/module-clues\/([^/]+)$/);
       if (request.method === "GET" && moduleClueMatch) {
         const session = authenticate(request, config);
@@ -204,6 +222,7 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
           config.moduleClueVisibilityRootDir,
           decodeRouteSegment(moduleClueMatch[1]),
           session,
+          config.supportedPlayerIds,
           playerDirectory(config)
         );
         writeJson(response, 200, payload, corsHeaders);

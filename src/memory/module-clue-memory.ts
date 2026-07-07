@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { assertSafeSegment } from "./safe-path.js";
 
@@ -10,13 +10,16 @@ export interface ModuleClueRecord {
   tags: string[];
   thumbnail?: string;
   order: number;
+  isInitial?: boolean;
   reveals: string[];
+  revealReasons?: Record<string, string>;
 }
 
 export interface ModuleClueEdge {
   id: string;
   source: string;
   target: string;
+  reason?: string;
 }
 
 export interface ModuleCluePayload {
@@ -28,6 +31,11 @@ export interface ModuleCluePayload {
   edges: ModuleClueEdge[];
   tags: string[];
   players?: Array<{ id: string; name: string }>;
+}
+
+export interface ModuleClueSummary {
+  id: string;
+  name: string;
 }
 
 interface ModuleClueFile {
@@ -93,6 +101,16 @@ function requireStringArray(value: unknown, label: string): string[] {
   return value;
 }
 
+function optionalStringRecord(value: unknown, label: string): Record<string, string> | undefined {
+  if (value === undefined) return undefined;
+  const raw = requireObject(value, label);
+  const result: Record<string, string> = {};
+  for (const [key, item] of Object.entries(raw)) {
+    result[assertSafeSegment(key, label)] = requireString(item, `${label}.${key}`);
+  }
+  return result;
+}
+
 function normalizeClue(value: unknown): ModuleClueRecord {
   const clue = requireObject(value, "clue");
   const id = assertSafeSegment(requireString(clue.id, "clue.id"), "clue.id");
@@ -105,9 +123,11 @@ function normalizeClue(value: unknown): ModuleClueRecord {
     tags: requireStringArray(clue.tags ?? [], "clue.tags"),
     thumbnail: optionalString(clue.thumbnail, "clue.thumbnail"),
     order,
+    isInitial: clue.isInitial === true ? true : undefined,
     reveals: requireStringArray(clue.reveals ?? [], "clue.reveals").map((targetId) =>
       assertSafeSegment(targetId, "clue.reveals")
-    )
+    ),
+    revealReasons: optionalStringRecord(clue.revealReasons, "clue.revealReasons")
   };
 }
 
@@ -143,13 +163,17 @@ async function readModuleClueFile(rootDir: string, moduleId: string): Promise<Mo
   return normalizeClueFile(parsed, safeModuleId);
 }
 
+function isMissingFileError(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
+}
+
 async function readVisibilityFile(rootDir: string, moduleId: string): Promise<ModuleClueVisibilityFile> {
   try {
     return normalizeVisibilityFile(
       JSON.parse(await readFile(visibilityFilePath(rootDir, moduleId), "utf-8"))
     );
   } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+    if (isMissingFileError(error)) {
       return { version: 1, clues: {} };
     }
     throw error;
@@ -165,7 +189,12 @@ function buildEdges(clues: ModuleClueRecord[]): ModuleClueEdge[] {
   return clues.flatMap((clue) =>
     clue.reveals
       .filter((targetId) => clueIds.has(targetId))
-      .map((targetId) => ({ id: `${clue.id}->${targetId}`, source: clue.id, target: targetId }))
+      .map((targetId) => ({
+        id: `${clue.id}->${targetId}`,
+        source: clue.id,
+        target: targetId,
+        reason: clue.revealReasons?.[targetId]
+      }))
   );
 }
 
@@ -177,11 +206,72 @@ function deriveTags(clues: ModuleClueRecord[]): string[] {
   return Array.from(tags);
 }
 
+function filterClueLinks(clue: ModuleClueRecord, visibleClueIds: Set<string>): ModuleClueRecord {
+  const reveals = clue.reveals.filter((targetId) => visibleClueIds.has(targetId));
+  const revealReasons = clue.revealReasons
+    ? Object.fromEntries(
+      Object.entries(clue.revealReasons).filter(([targetId]) => visibleClueIds.has(targetId))
+    )
+    : undefined;
+  return {
+    ...clue,
+    reveals,
+    revealReasons
+  };
+}
+
+function compareModules(left: ModuleClueSummary, right: ModuleClueSummary): number {
+  return left.name.localeCompare(right.name) || left.id.localeCompare(right.id);
+}
+
+function visiblePlayerIdsForClue(
+  clue: ModuleClueRecord,
+  visibility: ModuleClueVisibilityFile,
+  supportedPlayerIds: string[]
+): string[] {
+  if (Object.prototype.hasOwnProperty.call(visibility.clues, clue.id)) {
+    return visibility.clues[clue.id] ?? [];
+  }
+  return clue.isInitial ? supportedPlayerIds : [];
+}
+
+export async function listModuleClueSummaries(
+  contentRootDir: string,
+  visibilityRootDir: string,
+  supportedPlayerIds: string[],
+  session: { playerId: string; displayName: string; isKeeper?: boolean }
+): Promise<ModuleClueSummary[]> {
+  const entries = await readdir(contentRootDir, { withFileTypes: true });
+  const modules: ModuleClueSummary[] = [];
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const moduleId = assertSafeSegment(entry.name, "moduleId");
+    let file: ModuleClueFile;
+    try {
+      file = await readModuleClueFile(contentRootDir, moduleId);
+    } catch (error) {
+      if (isMissingFileError(error)) continue;
+      throw error;
+    }
+    const visibility = await readVisibilityFile(visibilityRootDir, moduleId);
+    const hasVisibleClue =
+      session.isKeeper ||
+      file.clues.some((clue) =>
+        visiblePlayerIdsForClue(clue, visibility, supportedPlayerIds).includes(session.playerId)
+      );
+    if (hasVisibleClue) modules.push({ id: file.moduleId, name: file.moduleName });
+  }
+
+  return modules.sort(compareModules);
+}
+
 export async function readModuleCluePayload(
   contentRootDir: string,
   visibilityRootDir: string,
   moduleId: string,
   session: { playerId: string; displayName: string; isKeeper?: boolean },
+  supportedPlayerIds: string[],
   players: Array<{ id: string; name: string }>
 ): Promise<ModuleCluePayload> {
   const file = await readModuleClueFile(contentRootDir, moduleId);
@@ -189,18 +279,28 @@ export async function readModuleCluePayload(
   const allClues = file.clues.slice().sort(compareClues);
   const visibleClues = session.isKeeper
     ? allClues
-    : allClues.filter((clue) => visibility.clues[clue.id]?.includes(session.playerId));
+    : allClues.filter((clue) =>
+      visiblePlayerIdsForClue(clue, visibility, supportedPlayerIds).includes(session.playerId)
+    );
+  if (!session.isKeeper && visibleClues.length === 0) {
+    throw Object.assign(new Error("forbidden"), { statusCode: 403 });
+  }
+  const visibleClueIds = new Set(visibleClues.map((clue) => clue.id));
+  const safeVisibleClues = visibleClues.map((clue) => filterClueLinks(clue, visibleClueIds));
   const clues = visibleClues.map((clue) =>
     session.isKeeper
-      ? { ...clue, visiblePlayerIds: visibility.clues[clue.id] ?? [] }
-      : clue
+      ? {
+        ...filterClueLinks(clue, visibleClueIds),
+        visiblePlayerIds: visiblePlayerIdsForClue(clue, visibility, supportedPlayerIds)
+      }
+      : filterClueLinks(clue, visibleClueIds)
   );
 
   return {
     module: { id: file.moduleId, name: file.moduleName },
     clues,
-    edges: buildEdges(visibleClues),
-    tags: deriveTags(visibleClues),
+    edges: buildEdges(safeVisibleClues),
+    tags: deriveTags(safeVisibleClues),
     players: session.isKeeper ? players : undefined
   };
 }

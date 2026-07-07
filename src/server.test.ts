@@ -66,6 +66,7 @@ function createFixture(overrides: Partial<RuntimeConfig> = {}) {
   mkdirSync(join(chatMemoryRootDir, "char.claire", "players", "pl.leina"), { recursive: true });
   mkdirSync(join(moduleClueContentRootDir, "naimen-prologue"), { recursive: true });
   mkdirSync(join(moduleClueVisibilityRootDir, "naimen-prologue"), { recursive: true });
+  mkdirSync(join(moduleClueContentRootDir, "drafts"), { recursive: true });
   writeFileSync(
     join(npcDir, "npc.json"),
     JSON.stringify(
@@ -114,7 +115,11 @@ function createFixture(overrides: Partial<RuntimeConfig> = {}) {
             tags: ["序章"],
             thumbnail: "/wiki/images/naimen/arrival.jpg",
             order: 1,
-            reveals: ["hidden-letter", "station-clock"]
+            reveals: ["hidden-letter", "station-clock"],
+            revealReasons: {
+              "hidden-letter": "抵达后发现只对莱纳开放的密信。",
+              "station-clock": "抵达现场能直接看到停摆的站钟。"
+            }
           },
           {
             id: "hidden-letter",
@@ -150,6 +155,96 @@ function createFixture(overrides: Partial<RuntimeConfig> = {}) {
           arrival: ["pl.cici"],
           "hidden-letter": ["pl.leina"],
           "station-clock": ["pl.cici"]
+        }
+      },
+      null,
+      2
+    )
+  );
+  mkdirSync(join(moduleClueContentRootDir, "keeper-archive"), { recursive: true });
+  mkdirSync(join(moduleClueVisibilityRootDir, "keeper-archive"), { recursive: true });
+  writeFileSync(
+    join(moduleClueContentRootDir, "keeper-archive", "clues.json"),
+    JSON.stringify(
+      {
+        moduleId: "keeper-archive",
+        moduleName: "KP 档案",
+        clues: [
+          {
+            id: "keeper-note",
+            title: "KP 备忘",
+            summary: "只有 KP 和莱纳可以看见。",
+            tags: ["管理"],
+            order: 1,
+            reveals: []
+          }
+        ]
+      },
+      null,
+      2
+    )
+  );
+  writeFileSync(
+    join(moduleClueVisibilityRootDir, "keeper-archive", "visibility.json"),
+    JSON.stringify(
+      {
+        version: 1,
+        clues: {
+          "keeper-note": ["pl.leina"]
+        }
+      },
+      null,
+      2
+    )
+  );
+  mkdirSync(join(moduleClueContentRootDir, "default-visibility"), { recursive: true });
+  writeFileSync(
+    join(moduleClueContentRootDir, "default-visibility", "clues.json"),
+    JSON.stringify(
+      {
+        moduleId: "default-visibility",
+        moduleName: "默认可见性测试",
+        clues: [
+          {
+            id: "entry",
+            title: "默认入口",
+            summary: "未配置 visibility 时默认对所有 PL 可见。",
+            tags: ["入口"],
+            order: 1,
+            isInitial: true,
+            reveals: ["secret"]
+          },
+          {
+            id: "configured-entry",
+            title: "显式入口",
+            summary: "即使是入口，也应以 visibility 显式配置为准。",
+            tags: ["入口"],
+            order: 2,
+            isInitial: true,
+            reveals: []
+          },
+          {
+            id: "secret",
+            title: "默认隐藏",
+            summary: "未配置 visibility 时不应该默认对 PL 可见。",
+            tags: ["隐藏"],
+            order: 3,
+            reveals: []
+          }
+        ]
+      },
+      null,
+      2
+    )
+  );
+  mkdirSync(join(moduleClueVisibilityRootDir, "default-visibility"), { recursive: true });
+  writeFileSync(
+    join(moduleClueVisibilityRootDir, "default-visibility", "visibility.json"),
+    JSON.stringify(
+      {
+        version: 1,
+        clues: {
+          "configured-entry": ["pl.leina"]
         }
       },
       null,
@@ -245,6 +340,55 @@ describe("createApp CORS", () => {
 });
 
 describe("createApp module clue APIs", () => {
+  it("lists clue modules visible to the bearer session", async () => {
+    const fixture = createFixture();
+    await withServer(fixture.config, new FakeProvider(), async (baseUrl) => {
+      const playerResponse = await fetch(`${baseUrl}/api/module-clues`, {
+        headers: { authorization: "Bearer cici-token" }
+      });
+      expect(playerResponse.status).toBe(200);
+      expect(await playerResponse.json()).toEqual({
+        modules: [
+          { id: "naimen-prologue", name: "奈面序章" },
+          { id: "default-visibility", name: "默认可见性测试" }
+        ]
+      });
+
+      const leinaResponse = await fetch(`${baseUrl}/api/module-clues`, {
+        headers: { authorization: "Bearer leina-token" }
+      });
+      expect(leinaResponse.status).toBe(200);
+      expect(await leinaResponse.json()).toEqual({
+        modules: [
+          { id: "keeper-archive", name: "KP 档案" },
+          { id: "naimen-prologue", name: "奈面序章" },
+          { id: "default-visibility", name: "默认可见性测试" }
+        ]
+      });
+
+      const keeperResponse = await fetch(`${baseUrl}/api/module-clues`, {
+        headers: { authorization: `Bearer ${keeperToken}` }
+      });
+      expect(keeperResponse.status).toBe(200);
+      expect(await keeperResponse.json()).toEqual({
+        modules: [
+          { id: "keeper-archive", name: "KP 档案" },
+          { id: "naimen-prologue", name: "奈面序章" },
+          { id: "default-visibility", name: "默认可见性测试" }
+        ]
+      });
+    });
+  });
+
+  it("rejects missing bearer tokens when listing clue modules", async () => {
+    const fixture = createFixture();
+    await withServer(fixture.config, new FakeProvider(), async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/module-clues`);
+      expect(response.status).toBe(401);
+      expect(await response.json()).toEqual({ error: "unauthorized" });
+    });
+  });
+
   it("filters clue payload and tags to the bearer player's visible clues", async () => {
     const fixture = createFixture();
     await withServer(fixture.config, new FakeProvider(), async (baseUrl) => {
@@ -259,13 +403,82 @@ describe("createApp module clue APIs", () => {
         "arrival",
         "station-clock"
       ]);
-      expect(body.edges).toEqual([{ id: "arrival->station-clock", source: "arrival", target: "station-clock" }]);
+      expect(body.edges).toEqual([
+        {
+          id: "arrival->station-clock",
+          source: "arrival",
+          target: "station-clock",
+          reason: "抵达现场能直接看到停摆的站钟。"
+        }
+      ]);
       expect(body.tags).toEqual(["序章", "时间"]);
       expect(JSON.stringify(body)).not.toContain("不可见的密信");
       expect(JSON.stringify(body)).not.toContain("莱纳才能看到");
       expect(JSON.stringify(body)).not.toContain("这段内容不应该出现在 Cici");
       expect(JSON.stringify(body)).not.toContain("密信");
       expect(JSON.stringify(body)).not.toContain("letter.jpg");
+    });
+  });
+
+  it("defaults only initial clues to all supported players when visibility is unset", async () => {
+    const fixture = createFixture();
+    await withServer(fixture.config, new FakeProvider(), async (baseUrl) => {
+      const playerResponse = await fetch(`${baseUrl}/api/module-clues/default-visibility`, {
+        headers: { authorization: "Bearer cici-token" }
+      });
+      expect(playerResponse.status).toBe(200);
+      const playerBody = await playerResponse.json();
+      expect(playerBody.clues.map((clue: { id: string }) => clue.id)).toEqual(["entry"]);
+      expect(playerBody.edges).toEqual([]);
+      expect(playerBody.tags).toEqual(["入口"]);
+
+      const keeperResponse = await fetch(`${baseUrl}/api/module-clues/default-visibility`, {
+        headers: { authorization: `Bearer ${keeperToken}` }
+      });
+      expect(keeperResponse.status).toBe(200);
+      const keeperBody = await keeperResponse.json();
+      expect(keeperBody.clues.find((clue: { id: string }) => clue.id === "entry").visiblePlayerIds).toEqual([
+        "pl.cici",
+        "pl.leina"
+      ]);
+      expect(keeperBody.clues.find((clue: { id: string }) => clue.id === "configured-entry").visiblePlayerIds).toEqual([
+        "pl.leina"
+      ]);
+      expect(keeperBody.clues.find((clue: { id: string }) => clue.id === "secret").visiblePlayerIds).toEqual([]);
+    });
+  });
+
+  it("does not expose module metadata when a player requests an invisible clue module directly", async () => {
+    const fixture = createFixture();
+    await withServer(fixture.config, new FakeProvider(), async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/module-clues/keeper-archive`, {
+        headers: { authorization: "Bearer cici-token" }
+      });
+
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual({ error: "forbidden" });
+    });
+  });
+
+  it("uses supported player ids, not every token record, for default initial clue visibility metadata", async () => {
+    const fixture = createFixture({
+      supportedPlayerIds: ["pl.cici"],
+      tokenHashRecords: [
+        tokenRecord("cici-token", "pl.cici", "Cici"),
+        tokenRecord("legacy-token", "pl.legacy", "Legacy"),
+        tokenRecord(keeperToken, "kp", "kp大人", true)
+      ]
+    });
+
+    await withServer(fixture.config, new FakeProvider(), async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/module-clues/default-visibility`, {
+        headers: { authorization: `Bearer ${keeperToken}` }
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.clues.find((clue: { id: string }) => clue.id === "entry").visiblePlayerIds).toEqual(["pl.cici"]);
+      expect(body.players).toEqual([{ id: "pl.cici", name: "Cici" }]);
     });
   });
 
