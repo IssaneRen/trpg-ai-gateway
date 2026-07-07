@@ -52,5 +52,17 @@
     "displayName": "阿年",
     "isKeeper": false,
     "tokenHash": "a654e6aed0b45975d7639d3454b627419c91d0b16a1776100e1f363f8004043d"
+  },
+  {
+    "playerId": "pl.20",
+    "displayName": "20不是20",
+    "isKeeper": false,
+    "tokenHash": "f71ca2ec75892be10998f7170bfd9d4e0d425668e627770bb17197c2a34daeab"
+  },
+  {
+    "playerId": "pl.betty",
+    "displayName": "贝蒂",
+    "isKeeper": false,
+    "tokenHash": "d335f749d4bc79d5486a99fe2a01e53b46f191dd81e90c33699c74161fcf071e"
   }
 ]
