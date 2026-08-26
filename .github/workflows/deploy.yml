@@ -38,9 +38,11 @@ jobs:
 
       - name: Pack release
         run: |
+          pnpm prune --prod
           tar -czf trpg-ai-gateway.tar.gz \
             package.json \
             pnpm-lock.yaml \
+            node_modules \
             README.md \
             dist \
             data \
@@ -60,7 +62,11 @@ jobs:
             RELEASE_DIR="${APP_DIR}/releases/${{ github.sha }}"
             sudo mkdir -p "$RELEASE_DIR"
             sudo mkdir -p "${APP_DIR}/shared/module-clue-visibility"
+            sudo mkdir -p "${APP_DIR}/shared/analytics"
+            sudo mkdir -p /var/www/trpg-content/backups
+            sudo mkdir -p /home/ubuntu/public_files/gate/trpg-content
             sudo chown -R "${USER}:${USER}" "$APP_DIR"
+            sudo chown -R "${USER}:${USER}" /var/www/trpg-content /home/ubuntu/public_files/gate/trpg-content
 
       - name: Upload release package
         uses: appleboy/scp-action@v0.1.7
@@ -125,6 +131,13 @@ jobs:
             EnvironmentFile=${ENV_FILE}
             Environment=MODULE_CLUE_CONTENT_ROOT_DIR=${APP_DIR}/current/data/module-clues
             Environment=MODULE_CLUE_VISIBILITY_ROOT_DIR=${APP_DIR}/shared/module-clue-visibility
+            Environment=ANALYTICS_ROOT_DIR=${APP_DIR}/shared/analytics
+            Environment=ANALYTICS_MAX_EVENTS=20000
+            Environment=CONTENT_ROOT_DIR=/var/www/trpg-content
+            Environment=CONTENT_UPLOAD_ROOT_DIR=/home/ubuntu/public_files/gate/trpg-content
+            Environment=CONTENT_UPLOAD_BASE_URL=/content-assets
+            Environment=CONTENT_MAX_UPLOAD_BYTES=10485760
+            Environment=CONTENT_MAX_IMPORT_BYTES=268435456
             ExecStart=${NODE_BIN} dist/server.js
             Restart=always
             RestartSec=3

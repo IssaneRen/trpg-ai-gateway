@@ -14,6 +14,13 @@ const config: RuntimeConfig = {
   wikiEntriesDir: "/unused",
   npcRootDir: "/unused",
   chatMemoryRootDir: "/unused",
+  analyticsRootDir: "/unused",
+  analyticsMaxEvents: 20000,
+  contentRootDir: "/unused",
+  contentUploadRootDir: "/unused",
+  contentUploadBaseUrl: "/content-assets",
+  contentMaxUploadBytes: 1024 * 1024,
+  contentMaxImportBytes: 8 * 1024 * 1024,
   moduleClueContentRootDir: "/unused",
   moduleClueVisibilityRootDir: "/unused",
   tokenHashPepper: "test-pepper",
@@ -23,6 +30,10 @@ const config: RuntimeConfig = {
     baseUrl: "https://unused.example.com",
     model: "unused",
     apiKey: "unused"
+  },
+  qqChatbot: {
+    playerMap: {},
+    adminQqIds: []
   }
 };
 const keeperToken = ["kp", "114514"].join("");
@@ -57,6 +68,9 @@ function createFixture(overrides: Partial<RuntimeConfig> = {}) {
   const wikiEntriesDir = join(root, "wiki");
   const npcRootDir = join(root, "npcs");
   const chatMemoryRootDir = join(root, "chat-memory");
+  const analyticsRootDir = join(root, "analytics");
+  const contentRootDir = join(root, "content");
+  const contentUploadRootDir = join(root, "content-uploads");
   const moduleClueContentRootDir = join(root, "module-clue-content");
   const moduleClueVisibilityRootDir = join(root, "module-clue-visibility");
   const npcDir = join(npcRootDir, "char.claire");
@@ -64,6 +78,17 @@ function createFixture(overrides: Partial<RuntimeConfig> = {}) {
   mkdirSync(join(npcDir, "players"), { recursive: true });
   mkdirSync(join(chatMemoryRootDir, "char.claire", "players", "pl.cici"), { recursive: true });
   mkdirSync(join(chatMemoryRootDir, "char.claire", "players", "pl.leina"), { recursive: true });
+  mkdirSync(analyticsRootDir, { recursive: true });
+  mkdirSync(join(contentRootDir, "blog", "posts"), { recursive: true });
+  mkdirSync(join(contentRootDir, "wiki", "entities", "entries"), { recursive: true });
+  mkdirSync(contentUploadRootDir, { recursive: true });
+  writeFileSync(join(contentRootDir, "blog", "index.json"), "[]\n");
+  writeFileSync(join(contentRootDir, "wiki", "entities", "players.json"), "[]\n");
+  writeFileSync(join(contentRootDir, "wiki", "entities", "modules.json"), "[]\n");
+  writeFileSync(
+    join(contentRootDir, "wiki", "index.json"),
+    JSON.stringify({ players: [], modules: [], entries: [], lookup: { entryIdByName: {}, playerIdByName: {}, moduleIdByName: {} } })
+  );
   mkdirSync(join(moduleClueContentRootDir, "naimen-prologue"), { recursive: true });
   mkdirSync(join(moduleClueVisibilityRootDir, "naimen-prologue"), { recursive: true });
   mkdirSync(join(moduleClueContentRootDir, "drafts"), { recursive: true });
@@ -257,6 +282,9 @@ function createFixture(overrides: Partial<RuntimeConfig> = {}) {
     wikiEntriesDir,
     npcRootDir,
     chatMemoryRootDir,
+    analyticsRootDir,
+    contentRootDir,
+    contentUploadRootDir,
     moduleClueContentRootDir,
     moduleClueVisibilityRootDir,
     supportedPlayerIds: ["pl.cici", "pl.leina"],
@@ -272,11 +300,120 @@ function createFixture(overrides: Partial<RuntimeConfig> = {}) {
     root,
     npcRootDir,
     chatMemoryRootDir,
+    analyticsRootDir,
+    contentRootDir,
+    contentUploadRootDir,
     moduleClueContentRootDir,
     moduleClueVisibilityRootDir,
     config: runtimeConfig
   };
 }
+
+describe("createApp content admin APIs", () => {
+  it("requires a keeper token for every admin content route", async () => {
+    const fixture = createFixture();
+    await withServer(fixture.config, new FakeProvider(), async (baseUrl) => {
+      const missing = await fetch(`${baseUrl}/api/admin/content/overview`);
+      expect(missing.status).toBe(401);
+
+      const player = await fetch(`${baseUrl}/api/admin/content/overview`, {
+        headers: { authorization: "Bearer cici-token" }
+      });
+      expect(player.status).toBe(403);
+
+      const keeper = await fetch(`${baseUrl}/api/admin/content/overview`, {
+        headers: { authorization: `Bearer ${keeperToken}` }
+      });
+      expect(keeper.status).toBe(200);
+      expect(await keeper.json()).toEqual({ blogs: [], wikiEntries: [], players: [], modules: [] });
+    });
+  });
+
+  it("lets keepers create and read blog and Wiki documents", async () => {
+    const fixture = createFixture();
+    await withServer(fixture.config, new FakeProvider(), async (baseUrl) => {
+      const headers = {
+        authorization: `Bearer ${keeperToken}`,
+        "content-type": "application/json"
+      };
+      const blog = {
+        id: "runtime-post",
+        title: "运行时文章",
+        tags: ["博客"],
+        renderMode: "markdown",
+        createdAt: "2026-08-25T00:00:00.000Z",
+        updatedAt: "2026-08-25T00:00:00.000Z",
+        markdown: "# 无需重新部署"
+      };
+      const blogSave = await fetch(`${baseUrl}/api/admin/content/blog/runtime-post`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify(blog)
+      });
+      expect(blogSave.status).toBe(200);
+      expect(await blogSave.json()).toMatchObject({ id: "runtime-post", title: "运行时文章" });
+
+      const blogRead = await fetch(`${baseUrl}/api/admin/content/blog/runtime-post`, {
+        headers: { authorization: `Bearer ${keeperToken}` }
+      });
+      expect(blogRead.status).toBe(200);
+      expect(await blogRead.json()).toMatchObject({ markdown: "# 无需重新部署\n" });
+
+      const wiki = {
+        id: "event.runtime",
+        category: "event",
+        displayName: "运行时事件",
+        summary: "后台写入。",
+        content: [{ type: "secret-panel", hiddenMode: "collapse", playerIds: [], blocks: [] }],
+        createdAt: "2026-08-25T00:00:00.000Z",
+        updatedAt: "2026-08-25T00:00:00.000Z"
+      };
+      const wikiSave = await fetch(`${baseUrl}/api/admin/content/wiki/event.runtime`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify(wiki)
+      });
+      expect(wikiSave.status).toBe(200);
+      expect(await wikiSave.json()).toMatchObject({ id: "event.runtime" });
+
+      const overview = await fetch(`${baseUrl}/api/admin/content/overview`, {
+        headers: { authorization: `Bearer ${keeperToken}` }
+      });
+      expect(await overview.json()).toMatchObject({
+        blogs: [{ id: "runtime-post", title: "运行时文章" }],
+        wikiEntries: [{ id: "event.runtime", displayName: "运行时事件" }]
+      });
+    });
+  });
+
+  it("uploads images and round-trips a ZIP backup for keepers", async () => {
+    const fixture = createFixture();
+    await withServer(fixture.config, new FakeProvider(), async (baseUrl) => {
+      const authorization = { authorization: `Bearer ${keeperToken}` };
+      const upload = await fetch(`${baseUrl}/api/admin/content/images?fileName=${encodeURIComponent("封面.png")}`, {
+        method: "POST",
+        headers: { ...authorization, "content-type": "image/png" },
+        body: new Uint8Array([137, 80, 78, 71])
+      });
+      expect(upload.status).toBe(201);
+      expect(await upload.json()).toMatchObject({ mimeType: "image/png", size: 4 });
+
+      const exported = await fetch(`${baseUrl}/api/admin/content/export`, { headers: authorization });
+      expect(exported.status).toBe(200);
+      expect(exported.headers.get("content-type")).toBe("application/zip");
+      const archive = await exported.arrayBuffer();
+      expect(archive.byteLength).toBeGreaterThan(100);
+
+      const imported = await fetch(`${baseUrl}/api/admin/content/import`, {
+        method: "POST",
+        headers: { ...authorization, "content-type": "application/zip" },
+        body: archive
+      });
+      expect(imported.status).toBe(200);
+      expect(await imported.json()).toMatchObject({ blogPosts: 0, wikiEntries: 0, uploadedFiles: 1 });
+    });
+  });
+});
 
 async function withServer<T>(
   runtimeConfig: RuntimeConfig,
@@ -336,6 +473,152 @@ describe("createApp CORS", () => {
     expect(response.status).toBe(204);
     expect(response.headers.get("access-control-allow-origin")).toBe("https://www.issane.cn");
     await new Promise<void>((resolve) => app.close(() => resolve()));
+  });
+});
+
+describe("createApp analytics APIs", () => {
+  it("records analytics events with the bearer session display name", async () => {
+    const fixture = createFixture();
+    await withServer(fixture.config, new FakeProvider(), async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/analytics/events`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer cici-token",
+          "content-type": "application/json",
+          "user-agent": "Vitest Browser",
+          "x-real-ip": "203.0.113.9"
+        },
+        body: JSON.stringify({
+          eventName: "page_view",
+          eventTime: "2026-07-09T10:00:00.000Z",
+          anonymousId: "anon-cici",
+          sessionId: "session-cici",
+          pagePath: "/blog",
+          pageUrl: "https://main.example.com/blog",
+          pageTitle: "博客杂谈",
+          referrer: "https://ref.example.com",
+          properties: { source: "route" }
+        })
+      });
+
+      expect(response.status).toBe(202);
+      expect(await response.json()).toEqual({ ok: true });
+
+      const raw = await readFile(join(fixture.analyticsRootDir, "events.jsonl"), "utf-8");
+      const stored = JSON.parse(raw.trim());
+      expect(stored).toMatchObject({
+        eventName: "page_view",
+        eventTime: "2026-07-09T10:00:00.000Z",
+        anonymousId: "anon-cici",
+        sessionId: "session-cici",
+        pagePath: "/blog",
+        pageUrl: "https://main.example.com/blog",
+        pageTitle: "博客杂谈",
+        referrer: "https://ref.example.com",
+        properties: { source: "route" },
+        playerId: "pl.cici",
+        playerDisplayName: "Cici",
+        isKeeper: false,
+        ip: "203.0.113.9",
+        userAgent: "Vitest Browser"
+      });
+      expect(stored.eventId).toMatch(/^evt_/);
+      expect(stored.receivedAt).toBe("2026-07-09T10:00:00.000Z");
+    });
+  });
+
+  it("summarizes analytics for keeper tokens without exposing raw ip values", async () => {
+    const fixture = createFixture();
+    await withServer(fixture.config, new FakeProvider(), async (baseUrl) => {
+      for (const event of [
+        {
+          headers: { authorization: "Bearer cici-token" },
+          body: {
+            eventName: "page_view",
+            eventTime: "2026-07-09T10:00:00.000Z",
+            anonymousId: "anon-cici",
+            sessionId: "session-cici",
+            pagePath: "/blog",
+            pageTitle: "博客杂谈"
+          }
+        },
+        {
+          headers: {},
+          body: {
+            eventName: "click_blog_card",
+            eventTime: "2026-07-09T10:01:00.000Z",
+            anonymousId: "anon-guest",
+            sessionId: "session-guest",
+            pagePath: "/blog",
+            properties: { postId: "report.invite-to-dance-20260607" }
+          }
+        }
+      ]) {
+        const response = await fetch(`${baseUrl}/api/analytics/events`, {
+          method: "POST",
+          headers: {
+            ...event.headers,
+            "content-type": "application/json",
+            "x-real-ip": "198.51.100.8"
+          },
+          body: JSON.stringify(event.body)
+        });
+        expect(response.status).toBe(202);
+      }
+
+      const missing = await fetch(`${baseUrl}/api/analytics/summary`);
+      expect(missing.status).toBe(401);
+
+      const player = await fetch(`${baseUrl}/api/analytics/summary`, {
+        headers: { authorization: "Bearer cici-token" }
+      });
+      expect(player.status).toBe(403);
+
+      const keeper = await fetch(`${baseUrl}/api/analytics/summary`, {
+        headers: { authorization: `Bearer ${keeperToken}` }
+      });
+      expect(keeper.status).toBe(200);
+      const body = await keeper.json();
+      expect(body).toMatchObject({
+        totals: {
+          events: 2,
+          pageViews: 1,
+          clicks: 1,
+          uniqueVisitors: 2
+        },
+        topPages: [{ pagePath: "/blog", pv: 1, uv: 1 }],
+        topClicks: [{ eventName: "click_blog_card", pv: 1, uv: 1 }],
+        players: [{ displayName: "Cici", playerId: "pl.cici", events: 1 }]
+      });
+      expect(JSON.stringify(body)).not.toContain("198.51.100.8");
+      expect(JSON.stringify(body)).not.toContain("ip");
+    });
+  });
+
+  it("keeps only the most recent analytics events when the retention limit is reached", async () => {
+    const fixture = createFixture({ analyticsMaxEvents: 2 });
+    await withServer(fixture.config, new FakeProvider(), async (baseUrl) => {
+      for (const pagePath of ["/first", "/second", "/third"]) {
+        const response = await fetch(`${baseUrl}/api/analytics/events`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            eventName: "page_view",
+            anonymousId: `anon-${pagePath}`,
+            sessionId: `session-${pagePath}`,
+            pagePath
+          })
+        });
+        expect(response.status).toBe(202);
+      }
+
+      const raw = await readFile(join(fixture.analyticsRootDir, "events.jsonl"), "utf-8");
+      const pagePaths = raw
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line).pagePath);
+      expect(pagePaths).toEqual(["/second", "/third"]);
+    });
   });
 });
 
@@ -783,6 +1066,183 @@ describe("createApp auth and npc chat APIs", () => {
       const context = await readFile(join(ciciDir, "current_context.md"), "utf-8");
       expect(context.startsWith("compressed context")).toBe(true);
       expect(context).toContain("现在如何？");
+    });
+  });
+
+  it("requires the internal token for qq chatbot talk", async () => {
+    const fixture = createFixture({
+      qqChatbot: {
+        internalToken: "internal-token",
+        playerMap: { "123456789": "pl.cici" },
+        adminQqIds: []
+      }
+    });
+    await withServer(fixture.config, new FakeProvider(), async (baseUrl) => {
+      const missing = await fetch(`${baseUrl}/api/internal/qq-chatbot/talk`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ qqUserId: "123456789", npc: "char.claire", message: "hello" })
+      });
+      const wrong = await fetch(`${baseUrl}/api/internal/qq-chatbot/talk`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-trpg-internal-token": "wrong" },
+        body: JSON.stringify({ qqUserId: "123456789", npc: "char.claire", message: "hello" })
+      });
+
+      expect(missing.status).toBe(403);
+      expect(wrong.status).toBe(403);
+    });
+  });
+
+  it("lets mapped qq users talk through the same npc player memory scope", async () => {
+    const fixture = createFixture({
+      qqChatbot: {
+        internalToken: "internal-token",
+        playerMap: { "123456789": "pl.cici" },
+        adminQqIds: []
+      }
+    });
+    const provider = new FakeProvider(["QQ reply"]);
+    await withServer(fixture.config, provider, async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/internal/qq-chatbot/talk`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-trpg-internal-token": "internal-token" },
+        body: JSON.stringify({ qqUserId: "123456789", npc: "克莱儿", message: "你还记得我吗？" })
+      });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        npcId: "char.claire",
+        npcDisplayName: "克莱儿",
+        playerId: "pl.cici",
+        content: "QQ reply"
+      });
+      expect(provider.calls).toHaveLength(1);
+
+      const log = await readFile(
+        join(fixture.chatMemoryRootDir, "char.claire", "players", "pl.cici", "full_log.log"),
+        "utf-8"
+      );
+      expect(log).toContain("你还记得我吗？");
+      expect(log).toContain("QQ reply");
+    });
+  });
+
+  it("returns safe portrait hints for qq chatbot talk", async () => {
+    const fixture = createFixture({
+      qqChatbot: {
+        internalToken: "internal-token",
+        playerMap: { "123456789": "pl.cici" },
+        adminQqIds: []
+      }
+    });
+    writeFileSync(
+      join(fixture.npcRootDir, "char.claire", "npc.json"),
+      JSON.stringify(
+        {
+          id: "char.claire",
+          displayName: "克莱儿",
+          role: "NPC",
+          tone: "谨慎",
+          portraitFiles: ["尴尬.jpg"]
+        },
+        null,
+        2
+      )
+    );
+    const provider = new FakeProvider(["【立绘: 尴尬.jpg】\n我记得。"]);
+    await withServer(fixture.config, provider, async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/internal/qq-chatbot/talk`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-trpg-internal-token": "internal-token" },
+        body: JSON.stringify({ qqUserId: "123456789", npc: "克莱儿", message: "你还记得我吗？" })
+      });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        npcId: "char.claire",
+        content: "我记得。",
+        portraitFile: "尴尬.jpg"
+      });
+    });
+  });
+
+  it("keeps npc access checks for qq chatbot talk", async () => {
+    const fixture = createFixture({
+      qqChatbot: {
+        internalToken: "internal-token",
+        playerMap: { "123456789": "pl.cici" },
+        adminQqIds: []
+      }
+    });
+    const provider = new FakeProvider();
+    await withServer(fixture.config, provider, async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/internal/qq-chatbot/talk`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-trpg-internal-token": "internal-token" },
+        body: JSON.stringify({ qqUserId: "123456789", npc: "char.locked", message: "有人吗？" })
+      });
+
+      expect(response.status).toBe(403);
+      expect(provider.calls).toHaveLength(0);
+    });
+  });
+
+  it("lets configured qq admins append common and player npc memory", async () => {
+    const fixture = createFixture({
+      qqChatbot: {
+        internalToken: "internal-token",
+        playerMap: {},
+        adminQqIds: ["123456789"]
+      }
+    });
+    await withServer(fixture.config, new FakeProvider(), async (baseUrl) => {
+      const headers = { "content-type": "application/json", "x-trpg-internal-token": "internal-token" };
+      const common = await fetch(`${baseUrl}/api/internal/qq-chatbot/memory`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ adminQqUserId: "123456789", npc: "克莱儿", text: "她记得墓园里的钟声。" })
+      });
+      const player = await fetch(`${baseUrl}/api/internal/qq-chatbot/memory`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          adminQqUserId: "123456789",
+          npc: "char.claire",
+          player: "Cici",
+          text: "她单独记得 Cici 的承诺。"
+        })
+      });
+
+      expect(common.status).toBe(200);
+      expect(await common.json()).toEqual({ ok: true, npcId: "char.claire" });
+      expect(player.status).toBe(200);
+      expect(await player.json()).toEqual({ ok: true, npcId: "char.claire", playerId: "pl.cici" });
+      await expect(readFile(join(fixture.npcRootDir, "char.claire", "common-memory.md"), "utf-8")).resolves.toContain(
+        "她记得墓园里的钟声。"
+      );
+      await expect(
+        readFile(join(fixture.npcRootDir, "char.claire", "players", "pl.cici.memory.md"), "utf-8")
+      ).resolves.toContain("她单独记得 Cici 的承诺。");
+    });
+  });
+
+  it("rejects non-admin qq users from appending npc memory", async () => {
+    const fixture = createFixture({
+      qqChatbot: {
+        internalToken: "internal-token",
+        playerMap: {},
+        adminQqIds: ["123456789"]
+      }
+    });
+    await withServer(fixture.config, new FakeProvider(), async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/internal/qq-chatbot/memory`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-trpg-internal-token": "internal-token" },
+        body: JSON.stringify({ adminQqUserId: "987654321", npc: "克莱儿", text: "不应写入。" })
+      });
+
+      expect(response.status).toBe(403);
     });
   });
 });

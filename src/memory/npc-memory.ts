@@ -9,6 +9,8 @@ export interface NpcProfile {
   tone?: string;
   summary?: string;
   avatarUrl?: string;
+  aliases?: string[];
+  portraitFiles?: string[];
   wikiEntryId?: string;
   wikiFileNames?: string[];
   supportedPlayerIds?: string[];

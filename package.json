@@ -14,7 +14,10 @@
     "generate-token-hashes": "node scripts/generate-token-hashes.mjs",
     "type-check": "tsc --noEmit"
   },
-  "dependencies": {},
+  "dependencies": {
+    "fflate": "^0.8.3",
+    "gray-matter": "^4.0.3"
+  },
   "devDependencies": {
     "@types/node": "^25.0.0",
     "tsx": "^4.22.3",

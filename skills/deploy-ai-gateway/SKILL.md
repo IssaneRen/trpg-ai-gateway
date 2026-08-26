@@ -13,7 +13,7 @@ Recommended server paths:
 
 - App: `/opt/trpg-ai-gateway`
 - Env file: `/etc/trpg-ai/trpg-ai.env`
-- Parent Wiki entries: `/var/www/trpg-helper/wiki/entities/entries`
+- Runtime Wiki entries: `/var/www/trpg-content/wiki/entities/entries`
 - Local port: `127.0.0.1:3001`
 
 ## GitHub Actions Boundary
@@ -24,11 +24,15 @@ GitHub Actions should upload code and restart the service. Prefer not to store m
 
 ```bash
 PORT=3001
-WIKI_ENTRIES_DIR=/var/www/trpg-helper/wiki/entities/entries
-NPC_ROOT_DIR=/opt/trpg-ai-gateway/data/npcs
+WIKI_ENTRIES_DIR=/var/www/trpg-content/wiki/entities/entries
+NPC_ROOT_DIR=/var/www/trpg-ai-gateway/shared/npcs
+CHAT_MEMORY_ROOT_DIR=/var/www/trpg-ai-gateway/shared/chat-memory
 AI_BASE_URL=https://api.deepseek.com
 AI_MODEL=deepseek-v4-flash
 DEEPSEEK_API_KEY=sk-xxx
+QQ_CHATBOT_INTERNAL_TOKEN=replace-with-random-token
+QQ_CHATBOT_PLAYER_MAP_FILE=/etc/trpg-ai/qq-chatbot.players.json
+QQ_CHATBOT_ADMIN_QQ_IDS=123456789
 ```
 
 ## Verify
