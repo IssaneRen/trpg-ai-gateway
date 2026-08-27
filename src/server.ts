@@ -208,6 +208,20 @@ function canAccessNpc(session: AuthSession, supportedPlayerIds: string[] | undef
   return session.isKeeper || !supportedPlayerIds || supportedPlayerIds.includes(session.playerId);
 }
 
+function qqChatbotPortraitSystemSuffix(portraitFiles: string[] | undefined): string {
+  if (!portraitFiles?.length) {
+    return "QQ 回复可选第一行格式：如果需要指定差分立绘，只能从 NPC 配置允许的文件名中选择，并把第一行写成【立绘: 文件名】；正文从下一行开始。";
+  }
+
+  return [
+    `可用差分立绘文件名：${portraitFiles.join(", ")}`,
+    "QQ 回复第一行可选格式：【立绘: 文件名】；正文从下一行开始。",
+    "只要当前回复的情绪、语气或场景大致匹配，就尽量选择一张最贴近的差分立绘。",
+    "只有在没有任何文件名符合当前情绪或场景时，才不要输出立绘标记。",
+    "文件名必须精确使用上方列表中的一个，不能编造、改写或添加路径。"
+  ].join("\n");
+}
+
 async function requireNpcAccess(config: RuntimeConfig, session: AuthSession, npcId: string): Promise<void> {
   const profile = await readNpcProfile(config.npcRootDir, npcId);
   if (!canAccessNpc(session, profile.supportedPlayerIds)) {
@@ -348,8 +362,7 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
         let portraitFile: string | undefined;
         const result = await queue.run(queueKey(profile.id, playerId), () =>
           runNpcChat(profile.id, playerId, body.message, undefined, {
-            systemSuffix:
-              "QQ 回复可选第一行格式：如果需要指定差分立绘，只能从 NPC 配置允许的文件名中选择，并把第一行写成【立绘: 文件名】；正文从下一行开始。",
+            systemSuffix: qqChatbotPortraitSystemSuffix(profile.portraitFiles),
             transformAssistantContent: (content) => {
               const parsed = extractQqChatbotPortrait(content, profile.portraitFiles);
               portraitFile = parsed.portraitFile;

@@ -1144,7 +1144,7 @@ describe("createApp auth and npc chat APIs", () => {
           displayName: "克莱儿",
           role: "NPC",
           tone: "谨慎",
-          portraitFiles: ["尴尬.jpg"]
+          portraitFiles: ["尴尬.jpg", "微笑.png"]
         },
         null,
         2
@@ -1164,6 +1164,8 @@ describe("createApp auth and npc chat APIs", () => {
         content: "我记得。",
         portraitFile: "尴尬.jpg"
       });
+      expect(provider.calls[0].messages[0].content).toContain("可用差分立绘文件名：尴尬.jpg, 微笑.png");
+      expect(provider.calls[0].messages[0].content).toContain("只要当前回复的情绪、语气或场景大致匹配，就尽量选择一张");
     });
   });
 
