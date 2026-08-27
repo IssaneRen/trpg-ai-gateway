@@ -12,13 +12,13 @@ Use this skill when deploying `trpg-ai-gateway`.
 Recommended server paths:
 
 - App: `/opt/trpg-ai-gateway`
-- Env file: `/etc/trpg-ai/trpg-ai.env`
+- Env file: `/home/ubuntu/trpg-ai-gateway.env`
 - Runtime Wiki entries: `/var/www/trpg-content/wiki/entities/entries`
 - Local port: `127.0.0.1:3001`
 
 ## GitHub Actions Boundary
 
-GitHub Actions should upload code and restart the service. Prefer not to store model API keys in GitHub Secrets. Keep model keys in `/etc/trpg-ai/trpg-ai.env` on the server.
+GitHub Actions should upload code and restart the service. Prefer not to store model API keys in GitHub Secrets. Keep model keys in `/home/ubuntu/trpg-ai-gateway.env` on the server.
 
 ## Required Environment
 
@@ -34,6 +34,8 @@ QQ_CHATBOT_INTERNAL_TOKEN=replace-with-random-token
 QQ_CHATBOT_PLAYER_MAP_FILE=/etc/trpg-ai/qq-chatbot.players.json
 QQ_CHATBOT_ADMIN_QQ_IDS=123456789
 ```
+
+Production NPC data is runtime content. Deploy packages should not ship `data/npcs`; set `NPC_ROOT_DIR` to a persistent shared directory instead.
 
 ## Verify
 

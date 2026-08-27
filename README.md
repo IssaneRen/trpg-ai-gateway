@@ -4,9 +4,9 @@
 
 ## 能力
 
-- 按 `npcId` 读取 `data/npcs/<npcId>/npc.json`。
+- 按 `npcId` 读取 `NPC_ROOT_DIR/<npcId>/npc.json`。
 - 按 `npc.json#wikiFileNames` 从父工程部署目录读取 Wiki JSON，作为通用记忆来源。
-- 按 `playerId` 读取 `data/npcs/<npcId>/players/<playerId>.memory.md`。
+- 按 `playerId` 读取 `NPC_ROOT_DIR/<npcId>/players/<playerId>.memory.md`。
 - 组装 prompt 后调用 DeepSeek 或其他 OpenAI-compatible 模型。
 - 可通过内部 QQ Chatbot 接口复用同一套 NPC/PL 记忆。
 - API key 只从服务器环境变量读取，不进入前端和 Git。
@@ -62,6 +62,8 @@ Content-Type: application/json
 ## GitHub Actions 自动部署
 
 子仓库 push 到 `main` 或 `master` 会触发 `.github/workflows/deploy.yml`。部署目录、服务名、运行时环境文件、模型 key 与服务器网络细节均由 GitHub Secrets 或服务器本地配置提供，不写入公开仓库。
+
+部署包会排除 `data/npcs`；生产 NPC 资料只从 `NPC_ROOT_DIR` 读取。当前线上约定为 `/var/www/trpg-ai-gateway/shared/npcs`，避免 release 切换覆盖或复制 NPC 运行时记忆。
 
 模组线索分为两类目录：
 

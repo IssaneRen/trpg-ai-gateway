@@ -39,7 +39,7 @@ jobs:
       - name: Pack release
         run: |
           pnpm prune --prod
-          tar -czf trpg-ai-gateway.tar.gz \
+          tar --exclude=data/npcs -czf trpg-ai-gateway.tar.gz \
             package.json \
             pnpm-lock.yaml \
             node_modules \

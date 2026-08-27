@@ -23,9 +23,27 @@ function section(title: string, content: string): string {
   return trimmed ? `\n\n## ${title}\n${trimmed}` : "";
 }
 
+function formatNpcAiContext(content: string, playerId: string): string {
+  if (!content.trim()) return content;
+  try {
+    const parsed = JSON.parse(content) as Record<string, unknown>;
+    const attitude = parsed["对玩家的态度"];
+    if (!attitude || typeof attitude !== "object" || Array.isArray(attitude)) return content;
+
+    const selected = (attitude as Record<string, unknown>)[playerId];
+    parsed["对玩家的态度"] = selected === undefined ? {} : { [playerId]: selected };
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    return content;
+  }
+}
+
 export async function buildNpcPrompt(options: BuildNpcPromptOptions): Promise<PromptBuildResult> {
   const profile = await readNpcProfile(options.npcRootDir, options.npcId);
-  const aiContext = await readNpcAiContext(options.npcRootDir, options.npcId);
+  const aiContext = formatNpcAiContext(
+    await readNpcAiContext(options.npcRootDir, options.npcId),
+    options.playerId
+  );
   const commonMemory = await readNpcCommonMemory(options.npcRootDir, options.npcId);
   const playerMemory = await readNpcPlayerMemory(
     options.npcRootDir,

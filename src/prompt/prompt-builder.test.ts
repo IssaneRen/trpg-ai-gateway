@@ -61,7 +61,17 @@ function createFixture() {
   );
   writeFileSync(
     join(npcDir, "ai-context.json"),
-    JSON.stringify({ longTermSecret: "AI 上下文：她正在隐瞒账本。" }, null, 2)
+    JSON.stringify(
+      {
+        longTermSecret: "AI 上下文：她正在隐瞒账本。",
+        对玩家的态度: {
+          "pl.cici": "Cici 专属态度：她记得 Cici 帮她修过门。",
+          "pl.leina": "Leina 专属态度：她不信任 Leina 的问题。"
+        }
+      },
+      null,
+      2
+    )
   );
   writeFileSync(join(npcDir, "common-memory.md"), "NPC 通用记忆：不轻易相信外乡人。\n");
   writeFileSync(join(npcDir, "players", "pl.cici.memory.md"), "PL 私有记忆：Cici 曾帮她修过门。\n");
@@ -114,6 +124,22 @@ describe("buildNpcPrompt", () => {
     expect(prompt.messages[0].content).toContain("公开记忆");
     expect(prompt.messages[0].content).not.toContain("Cici 解锁记忆");
     expect(prompt.messages[0].content).not.toContain("PL 私有记忆");
+  });
+
+  it("keeps only the selected player's ai-context attitude", async () => {
+    const fixture = createFixture();
+
+    const prompt = await buildNpcPrompt({
+      npcId: "char.claire",
+      playerId: "pl.cici",
+      userMessage: "你怎么看我？",
+      wikiEntriesDir: fixture.wikiEntriesDir,
+      npcRootDir: fixture.npcRootDir,
+      chatMemoryRootDir: fixture.chatMemoryRootDir
+    });
+
+    expect(prompt.messages[0].content).toContain("Cici 专属态度");
+    expect(prompt.messages[0].content).not.toContain("Leina 专属态度");
   });
 
   it("places the four core npc rules at the very beginning of the system prompt", async () => {

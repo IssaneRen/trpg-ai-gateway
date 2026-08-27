@@ -10,7 +10,7 @@ Use this skill inside the `trpg-ai-gateway` repository when maintaining NPC memo
 ## Workflow
 
 1. Read `repo.json` first to confirm paths and security rules.
-2. Locate the NPC folder at `data/npcs/<npcId>/`.
+2. Locate the NPC folder under the configured `NPC_ROOT_DIR`, for example `/var/www/trpg-ai-gateway/shared/npcs/<npcId>/` in production.
 3. Keep one NPC per folder:
    - `npc.json` stores metadata and `wikiFileNames`.
    - `common-memory.md` stores memory available to all PLs.
