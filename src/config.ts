@@ -16,6 +16,7 @@ export interface RuntimeConfig {
   contentUploadBaseUrl: string;
   contentMaxUploadBytes: number;
   contentMaxImportBytes: number;
+  workbenchRootDir: string;
   moduleClueContentRootDir: string;
   moduleClueVisibilityRootDir: string;
   tokenHashPepper: string;
@@ -47,6 +48,7 @@ interface LocalConfigFile {
   contentUploadBaseUrl?: string;
   contentMaxUploadBytes?: number;
   contentMaxImportBytes?: number;
+  workbenchRootDir?: string;
   moduleClueRootDir?: string;
   moduleClueContentRootDir?: string;
   moduleClueVisibilityRootDir?: string;
@@ -160,6 +162,7 @@ export function loadRuntimeConfig(): RuntimeConfig {
       256 * 1024 * 1024,
       "CONTENT_MAX_IMPORT_BYTES"
     ),
+    workbenchRootDir: resolve(process.env.WORKBENCH_ROOT_DIR ?? local.workbenchRootDir ?? ".local/workbench"),
     moduleClueContentRootDir: resolve(
       requireValue(
         process.env.MODULE_CLUE_CONTENT_ROOT_DIR ?? local.moduleClueContentRootDir ?? legacyModuleClueRootDir,

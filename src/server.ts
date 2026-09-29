@@ -28,6 +28,7 @@ import { requireQqChatbotInternalToken } from "./qq/qq-chatbot-auth.js";
 import { extractQqChatbotPortrait } from "./qq/qq-chatbot-portrait.js";
 import { resolveNpcProfileByName, resolvePlayerIdByName, resolveQqPlayerId } from "./qq/qq-chatbot-resolver.js";
 import { KeyedSerialQueue } from "./queue/keyed-queue.js";
+import { WorkbenchStore } from "./workbench/workbench-store.js";
 import type { AiProvider, ChatRequest, ChatResponse } from "./types.js";
 
 async function readJsonBody(request: IncomingMessage): Promise<unknown> {
@@ -261,6 +262,7 @@ export interface CreateAppOptions {
   provider?: AiProvider;
   now?: () => Date;
   contentStore?: ContentStore;
+  workbenchStore?: WorkbenchStore;
 }
 
 export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: CreateAppOptions = {}) {
@@ -277,6 +279,8 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
     });
   const queue = new KeyedSerialQueue();
   const contentQueue = new KeyedSerialQueue();
+  const workbenchStore = options.workbenchStore ?? new WorkbenchStore(config.workbenchRootDir, config.tokenHashPepper);
+  const workbenchQueue = new KeyedSerialQueue();
 
   async function runNpcChat(
     npcId: string,
@@ -332,6 +336,36 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
         response.writeHead(204, corsHeaders);
         response.end();
         return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/portfolio") {
+        const data = await workbenchQueue.run("workbench", () => workbenchStore.read());
+        writeJson(response, 200, data.works.filter((work) => work.status === "published").map(({ body, ...summary }) => summary), corsHeaders);
+        return;
+      }
+
+      const publicWorkMatch = rawPath.match(/^\/api\/portfolio\/([a-zA-Z0-9_-]+)$/);
+      if (request.method === "GET" && publicWorkMatch) {
+        const data = await workbenchQueue.run("workbench", () => workbenchStore.read());
+        const work = data.works.find((item) => item.id === publicWorkMatch[1] && item.status === "published");
+        writeJson(response, work ? 200 : 404, work ?? { error: "not_found" }, corsHeaders);
+        return;
+      }
+
+      if (url.pathname === "/api/admin/workbench") {
+        const session = authenticate(request, config);
+        if (!session) { writeJson(response, 401, { error: "unauthorized" }, corsHeaders); return; }
+        requireKeeperSession(session);
+        if (request.method === "GET") {
+          writeJson(response, 200, await workbenchQueue.run("workbench", () => workbenchStore.read()), corsHeaders);
+          return;
+        }
+        if (request.method === "PUT") {
+          const bytes = await readBoundedBody(request, 2 * 1024 * 1024);
+          const input = JSON.parse(Buffer.from(bytes).toString("utf8"));
+          writeJson(response, 200, await workbenchQueue.run("workbench", () => workbenchStore.write(input)), corsHeaders);
+          return;
+        }
       }
 
       if (request.method === "GET" && url.pathname === "/health") {

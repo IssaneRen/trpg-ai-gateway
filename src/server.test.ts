@@ -21,6 +21,7 @@ const config: RuntimeConfig = {
   contentUploadBaseUrl: "/content-assets",
   contentMaxUploadBytes: 1024 * 1024,
   contentMaxImportBytes: 8 * 1024 * 1024,
+  workbenchRootDir: "/unused",
   moduleClueContentRootDir: "/unused",
   moduleClueVisibilityRootDir: "/unused",
   tokenHashPepper: "test-pepper",
@@ -71,6 +72,7 @@ function createFixture(overrides: Partial<RuntimeConfig> = {}) {
   const analyticsRootDir = join(root, "analytics");
   const contentRootDir = join(root, "content");
   const contentUploadRootDir = join(root, "content-uploads");
+  const workbenchRootDir = join(root, "workbench");
   const moduleClueContentRootDir = join(root, "module-clue-content");
   const moduleClueVisibilityRootDir = join(root, "module-clue-visibility");
   const npcDir = join(npcRootDir, "char.claire");
@@ -285,6 +287,7 @@ function createFixture(overrides: Partial<RuntimeConfig> = {}) {
     analyticsRootDir,
     contentRootDir,
     contentUploadRootDir,
+    workbenchRootDir,
     moduleClueContentRootDir,
     moduleClueVisibilityRootDir,
     supportedPlayerIds: ["pl.cici", "pl.leina"],
@@ -411,6 +414,41 @@ describe("createApp content admin APIs", () => {
       });
       expect(imported.status).toBe(200);
       expect(await imported.json()).toMatchObject({ blogPosts: 0, wikiEntries: 0, uploadedFiles: 1 });
+    });
+  });
+});
+
+describe("workbench APIs", () => {
+  it("keeps drafts private, publishes only selected works, and encrypts stored data", async () => {
+    const fixture = createFixture();
+    await withServer(fixture.config, new FakeProvider(), async (baseUrl) => {
+      const privateUrl = `${baseUrl}/api/admin/workbench`;
+      const unauthorized = await fetch(privateUrl);
+      expect(unauthorized.status).toBe(401);
+      const player = await fetch(privateUrl, { headers: { authorization: "Bearer cici-token" } });
+      expect(player.status).toBe(403);
+      const kpHeaders = { authorization: `Bearer ${keeperToken}`, "content-type": "application/json" };
+      const data = {
+        version: 1,
+        plans: [{ id: "secret-plan", title: "私人计划", detail: "不能公开", dueDate: "", status: "todo" }],
+        learning: [],
+        works: [
+          { id: "draft", title: "秘密草稿", kind: "novel", summary: "私密", body: "draft secret", coverUrl: "", status: "draft", updatedAt: "2026-09-29" },
+          { id: "public", title: "公开作品", kind: "html", summary: "已发布", body: "<h1>Hello</h1>", coverUrl: "", status: "published", updatedAt: "2026-09-29" }
+        ]
+      };
+      const saved = await fetch(privateUrl, { method: "PUT", headers: kpHeaders, body: JSON.stringify(data) });
+      expect(saved.status).toBe(200);
+      expect(await saved.json()).toEqual(data);
+      const disk = await readFile(join(fixture.config.workbenchRootDir, "workbench.v1.enc.json"), "utf8");
+      expect(disk).not.toContain("私人计划");
+      expect(disk).not.toContain("draft secret");
+      const listed = await fetch(`${baseUrl}/api/portfolio`);
+      expect(await listed.json()).toEqual([{ id: "public", title: "公开作品", kind: "html", summary: "已发布", coverUrl: "", status: "published", updatedAt: "2026-09-29" }]);
+      expect((await fetch(`${baseUrl}/api/portfolio/draft`)).status).toBe(404);
+      expect((await fetch(`${baseUrl}/api/portfolio/public`)).status).toBe(200);
+      const reloaded = await fetch(privateUrl, { headers: kpHeaders });
+      expect(await reloaded.json()).toEqual(data);
     });
   });
 });

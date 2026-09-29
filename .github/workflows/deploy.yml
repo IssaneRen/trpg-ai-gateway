@@ -63,6 +63,7 @@ jobs:
             sudo mkdir -p "$RELEASE_DIR"
             sudo mkdir -p "${APP_DIR}/shared/module-clue-visibility"
             sudo mkdir -p "${APP_DIR}/shared/analytics"
+            sudo mkdir -p "${APP_DIR}/shared/workbench"
             sudo mkdir -p /var/www/trpg-content/backups
             sudo mkdir -p /home/ubuntu/public_files/gate/trpg-content
             sudo chown -R "${USER}:${USER}" "$APP_DIR"
@@ -132,6 +133,7 @@ jobs:
             Environment=MODULE_CLUE_CONTENT_ROOT_DIR=${APP_DIR}/current/data/module-clues
             Environment=MODULE_CLUE_VISIBILITY_ROOT_DIR=${APP_DIR}/shared/module-clue-visibility
             Environment=ANALYTICS_ROOT_DIR=${APP_DIR}/shared/analytics
+            Environment=WORKBENCH_ROOT_DIR=${APP_DIR}/shared/workbench
             Environment=ANALYTICS_MAX_EVENTS=20000
             Environment=CONTENT_ROOT_DIR=/var/www/trpg-content
             Environment=CONTENT_UPLOAD_ROOT_DIR=/home/ubuntu/public_files/gate/trpg-content
