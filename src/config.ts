@@ -16,6 +16,7 @@ export interface RuntimeConfig {
   contentUploadBaseUrl: string;
   contentMaxUploadBytes: number;
   contentMaxImportBytes: number;
+  contentTrashRootDir: string;
   workbenchRootDir: string;
   moduleClueContentRootDir: string;
   moduleClueVisibilityRootDir: string;
@@ -48,6 +49,7 @@ interface LocalConfigFile {
   contentUploadBaseUrl?: string;
   contentMaxUploadBytes?: number;
   contentMaxImportBytes?: number;
+  contentTrashRootDir?: string;
   workbenchRootDir?: string;
   moduleClueRootDir?: string;
   moduleClueContentRootDir?: string;
@@ -124,6 +126,7 @@ export function loadRuntimeConfig(): RuntimeConfig {
     ? resolve(process.env.QQ_CHATBOT_PLAYER_MAP_FILE)
     : undefined;
   const legacyModuleClueRootDir = process.env.MODULE_CLUE_ROOT_DIR ?? local.moduleClueRootDir;
+  const contentRootDir = resolve(process.env.CONTENT_ROOT_DIR ?? local.contentRootDir ?? ".local/content");
   const supportedPlayerIds =
     splitCsv(process.env.SUPPORTED_PLAYER_IDS).length > 0
       ? splitCsv(process.env.SUPPORTED_PLAYER_IDS)
@@ -146,7 +149,7 @@ export function loadRuntimeConfig(): RuntimeConfig {
       20000,
       "ANALYTICS_MAX_EVENTS"
     ),
-    contentRootDir: resolve(process.env.CONTENT_ROOT_DIR ?? local.contentRootDir ?? ".local/content"),
+    contentRootDir,
     contentUploadRootDir: resolve(
       process.env.CONTENT_UPLOAD_ROOT_DIR ?? local.contentUploadRootDir ?? ".local/content-uploads"
     ),
@@ -161,6 +164,9 @@ export function loadRuntimeConfig(): RuntimeConfig {
       process.env.CONTENT_MAX_IMPORT_BYTES ?? local.contentMaxImportBytes,
       256 * 1024 * 1024,
       "CONTENT_MAX_IMPORT_BYTES"
+    ),
+    contentTrashRootDir: resolve(
+      process.env.CONTENT_TRASH_ROOT_DIR ?? local.contentTrashRootDir ?? resolve(contentRootDir, "trash")
     ),
     workbenchRootDir: resolve(process.env.WORKBENCH_ROOT_DIR ?? local.workbenchRootDir ?? ".local/workbench"),
     moduleClueContentRootDir: resolve(

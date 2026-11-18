@@ -203,4 +203,67 @@ describe("ContentStore", () => {
     view.setUint32(centralDirectory + 24, 2 * 1024 * 1024, true);
     await expect(fixture.store.importZip(archive)).rejects.toThrow("解压后大小超出限制");
   });
+
+  it("deletes a blog post into trash and rebuilds the public index", async () => {
+    const fixture = createStore();
+    await fixture.store.saveBlog({
+      id: "keeper-notes",
+      title: "守秘人笔记",
+      tags: [],
+      renderMode: "markdown",
+      createdAt: "2026-08-25T00:00:00.000Z",
+      updatedAt: "2026-08-25T00:00:00.000Z",
+      markdown: "正文"
+    });
+    const result = await fixture.store.deleteBlog("keeper-notes");
+    expect(result.id).toBe("keeper-notes");
+    expect(result.references).toEqual([]);
+    expect(existsSync(join(fixture.contentRootDir, "blog", "posts", "keeper-notes.md"))).toBe(false);
+    const index = JSON.parse(readFileSync(join(fixture.contentRootDir, "blog", "index.json"), "utf-8")) as unknown[];
+    expect(index).toEqual([]);
+    expect(existsSync(result.trashedTo)).toBe(true);
+    expect(result.trashedTo).toContain(join("trash", "blog"));
+    await expect(fixture.store.deleteBlog("keeper-notes")).rejects.toThrow("博客不存在");
+  });
+
+  it("deletes a wiki entry, reports dangling references, and rebuilds the index", async () => {
+    const fixture = createStore();
+    const entry = exampleWikiEntry("loc.target");
+    await fixture.store.saveWiki(entry);
+    const neighbor = exampleWikiEntry("loc.other");
+    neighbor.displayName = "另一个地点";
+    neighbor.aliasNames = ["另一个别名"];
+    neighbor.relatedEntryIds = ["loc.target"];
+    await fixture.store.saveWiki(neighbor);
+    await fixture.store.saveBlog({
+      id: "linked-report",
+      title: "关联战报",
+      tags: [],
+      renderMode: "wiki",
+      wikiEntryId: "loc.target",
+      createdAt: "2026-08-25T00:00:00.000Z",
+      updatedAt: "2026-08-25T00:00:00.000Z",
+      markdown: "战报正文"
+    });
+
+    const result = await fixture.store.deleteWiki("loc.target");
+    expect(result.id).toBe("loc.target");
+    expect(result.trashedTo).toContain(join("trash", "wiki"));
+    expect(existsSync(join(fixture.contentRootDir, "wiki", "entities", "entries", "loc.target.json"))).toBe(false);
+    expect(result.references).toEqual([
+      { kind: "wiki", id: "loc.other", field: "relatedEntryIds" },
+      { kind: "blog", id: "linked-report", field: "wikiEntryId" }
+    ]);
+    const index = JSON.parse(readFileSync(join(fixture.contentRootDir, "wiki", "index.json"), "utf-8")) as {
+      entries: Array<{ id: string }>;
+    };
+    expect(index.entries.map((item) => item.id)).toEqual(["loc.other"]);
+    expect(existsSync(result.trashedTo)).toBe(true);
+    await expect(fixture.store.deleteWiki("loc.target")).rejects.toThrow("Wiki 词条不存在");
+  });
+
+  it("rejects unsafe ids before deleting wiki entries", async () => {
+    const fixture = createStore();
+    await expect(fixture.store.deleteWiki("..%2Fevil")).rejects.toThrow("不安全字符");
+  });
 });

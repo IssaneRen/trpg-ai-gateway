@@ -275,7 +275,8 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
       uploadRootDir: config.contentUploadRootDir,
       publicUploadBaseUrl: config.contentUploadBaseUrl,
       maxUploadBytes: config.contentMaxUploadBytes,
-      maxImportBytes: config.contentMaxImportBytes
+      maxImportBytes: config.contentMaxImportBytes,
+      trashRootDir: config.contentTrashRootDir
     });
   const queue = new KeyedSerialQueue();
   const contentQueue = new KeyedSerialQueue();
@@ -476,6 +477,10 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
             writeJson(response, 200, await contentQueue.run("content", () => contentStore.saveBlog(body)), corsHeaders);
             return;
           }
+          if (request.method === "DELETE") {
+            writeJson(response, 200, await contentQueue.run("content", () => contentStore.deleteBlog(id)), corsHeaders);
+            return;
+          }
         }
 
         const wikiMatch = rawPath.match(/^\/api\/admin\/content\/wiki\/([^/]+)$/);
@@ -491,6 +496,10 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
               throw new Error("Wiki id 与路由不一致");
             }
             writeJson(response, 200, await contentQueue.run("content", () => contentStore.saveWiki(body)), corsHeaders);
+            return;
+          }
+          if (request.method === "DELETE") {
+            writeJson(response, 200, await contentQueue.run("content", () => contentStore.deleteWiki(id)), corsHeaders);
             return;
           }
         }

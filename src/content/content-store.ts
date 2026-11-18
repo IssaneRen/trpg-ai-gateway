@@ -17,6 +17,8 @@ import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import type {
   BlogPostDocument,
   BlogPostSummary,
+  ContentDeleteReference,
+  ContentDeleteResult,
   ContentOverview,
   ContentStoreOptions,
   ImageUploadInput,
@@ -253,6 +255,14 @@ function fileCount(root: string, suffix?: string): number {
   return readdirSync(root).filter((name) => !suffix || name.endsWith(suffix)).length;
 }
 
+function moveToTrash(trashRootDir: string, kind: "blog" | "wiki", source: string, fileName: string): string {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const target = join(trashRootDir, kind, stamp, fileName);
+  mkdirSync(dirname(target), { recursive: true });
+  renameSync(source, target);
+  return target;
+}
+
 async function replaceDirectories(replacements: Array<{ source: string; target: string }>): Promise<void> {
   const suffix = randomUUID();
   const prepared = replacements.map(({ source, target }) => ({
@@ -301,10 +311,12 @@ async function replaceDirectories(replacements: Array<{ source: string; target: 
 export class ContentStore {
   private readonly blogRoot: string;
   private readonly wikiRoot: string;
+  private readonly trashRootDir: string;
 
   constructor(private readonly options: ContentStoreOptions) {
     this.blogRoot = join(options.contentRootDir, "blog");
     this.wikiRoot = join(options.contentRootDir, "wiki");
+    this.trashRootDir = options.trashRootDir ?? join(options.contentRootDir, "trash");
   }
 
   async getOverview(): Promise<ContentOverview> {
@@ -325,6 +337,25 @@ export class ContentStore {
   async readBlog(id: string): Promise<BlogPostDocument> {
     assertSafeId(id, "博客 id");
     return toBlogDocument(id, await readFile(join(this.blogRoot, "posts", `${id}.md`), "utf-8"));
+  }
+
+  async deleteBlog(id: string): Promise<ContentDeleteResult> {
+    assertSafeId(id, "博客 id");
+    const source = join(this.blogRoot, "posts", `${id}.md`);
+    if (!existsSync(source)) throw new Error(`博客不存在：${id}`);
+    const trashedTo = moveToTrash(this.trashRootDir, "blog", source, `${id}.md`);
+    const stage = join(tmpdir(), `trpg-blog-delete-${randomUUID()}`);
+    const stagedBlogRoot = join(stage, "blog");
+    await mkdir(stage, { recursive: true });
+    try {
+      if (existsSync(this.blogRoot)) await cp(this.blogRoot, stagedBlogRoot, { recursive: true });
+      await rm(join(stagedBlogRoot, "posts", `${id}.md`), { force: true });
+      await this.rebuildBlogIndex(stagedBlogRoot);
+      await replaceDirectories([{ source: stagedBlogRoot, target: this.blogRoot }]);
+    } finally {
+      await rm(stage, { recursive: true, force: true });
+    }
+    return { id, trashedTo, references: [] };
   }
 
   async saveBlog(document: BlogPostDocument): Promise<BlogPostDocument> {
@@ -352,6 +383,51 @@ export class ContentStore {
     const entry = readJson<unknown>(join(this.wikiRoot, "entities", "entries", `${id}.json`));
     validateWikiEntry(entry);
     return entry;
+  }
+
+  async deleteWiki(id: string): Promise<ContentDeleteResult> {
+    assertSafeId(id, "Wiki id");
+    const source = join(this.wikiRoot, "entities", "entries", `${id}.json`);
+    if (!existsSync(source)) throw new Error(`Wiki 词条不存在：${id}`);
+    const trashedTo = moveToTrash(this.trashRootDir, "wiki", source, `${id}.json`);
+    const references = await this.findWikiReferences(id);
+    const stage = join(tmpdir(), `trpg-wiki-delete-${randomUUID()}`);
+    const stagedWikiRoot = join(stage, "wiki");
+    await mkdir(stage, { recursive: true });
+    try {
+      if (existsSync(this.wikiRoot)) await cp(this.wikiRoot, stagedWikiRoot, { recursive: true });
+      await rm(join(stagedWikiRoot, "entities", "entries", `${id}.json`), { force: true });
+      await this.rebuildWikiIndex(stagedWikiRoot);
+      await replaceDirectories([{ source: stagedWikiRoot, target: this.wikiRoot }]);
+    } finally {
+      await rm(stage, { recursive: true, force: true });
+    }
+    return { id, trashedTo, references };
+  }
+
+  private async findWikiReferences(id: string): Promise<ContentDeleteReference[]> {
+    const references: ContentDeleteReference[] = [];
+    const entriesDirectory = join(this.wikiRoot, "entities", "entries");
+    if (existsSync(entriesDirectory)) {
+      for (const fileName of (await readdir(entriesDirectory)).filter((name) => name.endsWith(".json")).sort()) {
+        const entry = readJson<Partial<WikiEntryDocument>>(join(entriesDirectory, fileName));
+        const entryId = typeof entry.id === "string" ? entry.id : basename(fileName, ".json");
+        if (entryId === id) continue;
+        if (entry.relatedEntryIds?.includes(id)) {
+          references.push({ kind: "wiki", id: entryId, field: "relatedEntryIds" });
+        }
+      }
+    }
+    const blogIndexPath = join(this.blogRoot, "index.json");
+    if (existsSync(blogIndexPath)) {
+      const blogs = readJson<BlogPostSummary[]>(blogIndexPath);
+      for (const blog of blogs) {
+        if (blog.wikiEntryId === id) {
+          references.push({ kind: "blog", id: blog.id, field: "wikiEntryId" });
+        }
+      }
+    }
+    return references;
   }
 
   async saveWiki(entry: unknown): Promise<WikiEntryDocument> {

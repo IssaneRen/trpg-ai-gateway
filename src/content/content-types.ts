@@ -44,6 +44,19 @@ export interface ContentStoreOptions {
   publicUploadBaseUrl: string;
   maxUploadBytes: number;
   maxImportBytes: number;
+  trashRootDir?: string;
+}
+
+export interface ContentDeleteReference {
+  kind: "blog" | "wiki";
+  id: string;
+  field: string;
+}
+
+export interface ContentDeleteResult {
+  id: string;
+  trashedTo: string;
+  references: ContentDeleteReference[];
 }
 
 export interface ImageUploadInput {
