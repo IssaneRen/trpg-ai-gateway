@@ -469,6 +469,27 @@ async function withServer<T>(
   }
 }
 
+describe("private reader library", () => {
+  it("requires a keeper for the catalog and the file", async () => {
+    const fixture = createFixture();
+    const id = "a".repeat(64);
+    const dir = join(fixture.config.workbenchRootDir, "reader-books", id);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "book.json"), JSON.stringify({ sha256: id }));
+    writeFileSync(join(dir, "body.bin"), "reader-test");
+    await withServer(fixture.config, new FakeProvider(), async base => {
+      const catalog = base + "/api/admin/reader-books";
+      const headers = { authorization: "Bearer " + keeperToken };
+      for (const url of [catalog, catalog + "/" + id]) {
+        expect((await fetch(url)).status).toBe(401);
+        expect((await fetch(url, { headers: { authorization: "Bearer cici-token" } })).status).toBe(403);
+      }
+      expect(await (await fetch(catalog, { headers })).json()).toEqual([{ sha256: id }]);
+      expect(await (await fetch(catalog + "/" + id, { headers })).text()).toBe("reader-test");
+    });
+  });
+});
+
 describe("createApp CORS", () => {
   it("allows preflight requests from the configured origin", async () => {
     const app = createApp(config);
