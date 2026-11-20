@@ -18,6 +18,8 @@ export interface RuntimeConfig {
   contentMaxImportBytes: number;
   contentTrashRootDir: string;
   workbenchRootDir: string;
+  // 知识库数据库的持久目录。留空时 Gateway 可以运行原有功能，知识库接口返回未启用。
+  knowledgeRootDir?: string;
   moduleClueContentRootDir: string;
   moduleClueVisibilityRootDir: string;
   tokenHashPepper: string;
@@ -51,6 +53,7 @@ interface LocalConfigFile {
   contentMaxImportBytes?: number;
   contentTrashRootDir?: string;
   workbenchRootDir?: string;
+  knowledgeRootDir?: string;
   moduleClueRootDir?: string;
   moduleClueContentRootDir?: string;
   moduleClueVisibilityRootDir?: string;
@@ -127,6 +130,8 @@ export function loadRuntimeConfig(): RuntimeConfig {
     : undefined;
   const legacyModuleClueRootDir = process.env.MODULE_CLUE_ROOT_DIR ?? local.moduleClueRootDir;
   const contentRootDir = resolve(process.env.CONTENT_ROOT_DIR ?? local.contentRootDir ?? ".local/content");
+  // 生产通过环境变量指定。开发时也可以在本地配置文件指定隔离的测试目录。
+  const knowledgeRootDir = process.env.KNOWLEDGE_ROOT_DIR ?? local.knowledgeRootDir;
   const supportedPlayerIds =
     splitCsv(process.env.SUPPORTED_PLAYER_IDS).length > 0
       ? splitCsv(process.env.SUPPORTED_PLAYER_IDS)
@@ -169,6 +174,7 @@ export function loadRuntimeConfig(): RuntimeConfig {
       process.env.CONTENT_TRASH_ROOT_DIR ?? local.contentTrashRootDir ?? resolve(contentRootDir, "trash")
     ),
     workbenchRootDir: resolve(process.env.WORKBENCH_ROOT_DIR ?? local.workbenchRootDir ?? ".local/workbench"),
+    knowledgeRootDir: knowledgeRootDir ? resolve(knowledgeRootDir) : undefined,
     moduleClueContentRootDir: resolve(
       requireValue(
         process.env.MODULE_CLUE_CONTENT_ROOT_DIR ?? local.moduleClueContentRootDir ?? legacyModuleClueRootDir,

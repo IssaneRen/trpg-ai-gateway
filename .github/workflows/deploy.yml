@@ -3,10 +3,16 @@ name: Deploy AI Gateway
 on:
   push:
     branches: [main, master]
+  workflow_dispatch:
+
+concurrency:
+  group: trpg-ai-gateway-production
+  cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   AI_GATEWAY_APP_DIR: /var/www/trpg-ai-gateway
+  RELEASE_ID: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
 
 jobs:
   build-and-deploy:
@@ -39,7 +45,7 @@ jobs:
       - name: Pack release
         run: |
           pnpm prune --prod
-          tar --exclude=data/npcs -czf trpg-ai-gateway.tar.gz \
+          tar --exclude=data/npcs -czf "trpg-ai-gateway-${RELEASE_ID}.tar.gz" \
             package.json \
             pnpm-lock.yaml \
             node_modules \
@@ -59,14 +65,17 @@ jobs:
           script: |
             set -eu
             APP_DIR="${{ env.AI_GATEWAY_APP_DIR }}"
-            RELEASE_DIR="${APP_DIR}/releases/${{ github.sha }}"
+            RELEASE_DIR="${APP_DIR}/releases/${{ env.RELEASE_ID }}"
             sudo mkdir -p "$RELEASE_DIR"
             sudo mkdir -p "${APP_DIR}/shared/module-clue-visibility"
             sudo mkdir -p "${APP_DIR}/shared/analytics"
             sudo mkdir -p "${APP_DIR}/shared/workbench"
             sudo mkdir -p /var/www/trpg-content/backups
             sudo mkdir -p /home/ubuntu/public_files/gate/trpg-content
-            sudo chown -R "${USER}:${USER}" "$APP_DIR"
+            sudo chown "$(id -un):$(id -gn)" "$APP_DIR" "$RELEASE_DIR" \
+              "${APP_DIR}/shared/module-clue-visibility" "${APP_DIR}/shared/analytics" "${APP_DIR}/shared/workbench"
+            sudo install -d -m 0700 -o "$(id -un)" -g "$(id -gn)" \
+              "${APP_DIR}/shared/knowledge" "${APP_DIR}/shared/knowledge-backups"
             sudo chown -R "${USER}:${USER}" /var/www/trpg-content /home/ubuntu/public_files/gate/trpg-content
 
       - name: Upload release package
@@ -76,7 +85,7 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: 22
-          source: "trpg-ai-gateway.tar.gz"
+          source: "trpg-ai-gateway-${{ env.RELEASE_ID }}.tar.gz"
           target: "/tmp"
           overwrite: true
 
@@ -90,6 +99,9 @@ jobs:
           script: |
             set -eu
             APP_DIR="${{ env.AI_GATEWAY_APP_DIR }}"
+            RELEASE_ID="${{ env.RELEASE_ID }}"
+            exec 9>"${APP_DIR}/.deploy.lock"
+            flock -w 120 9
             ENV_FILE="${{ secrets.AI_GATEWAY_ENV_FILE }}"
             SERVICE_NAME="${{ secrets.AI_GATEWAY_SERVICE_NAME }}"
             if [ -z "$ENV_FILE" ]; then
@@ -100,29 +112,52 @@ jobs:
               echo "Missing required secret: AI_GATEWAY_SERVICE_NAME" >&2
               exit 1
             fi
-            RELEASE_DIR="${APP_DIR}/releases/${{ github.sha }}"
-
-            tar -xzf /tmp/trpg-ai-gateway.tar.gz -C "$RELEASE_DIR"
-
-            sudo ln -sfn "$RELEASE_DIR" "${APP_DIR}/current"
+            RELEASE_DIR="${APP_DIR}/releases/${RELEASE_ID}"
+            ARCHIVE="/tmp/trpg-ai-gateway-${RELEASE_ID}.tar.gz"
+            KNOWLEDGE_DIR="${APP_DIR}/shared/knowledge"
 
             if ! sudo test -f "$ENV_FILE"; then
               echo "Runtime environment file is missing on the server." >&2
               exit 1
             fi
 
-            if ! command -v node >/dev/null 2>&1; then
-              curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-              sudo apt-get install -y nodejs
-            fi
-            NODE_MAJOR="$(node -p 'Number(process.versions.node.split(".")[0])')"
-            if [ "$NODE_MAJOR" -lt 20 ]; then
-              curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-              sudo apt-get install -y nodejs
+            if ! command -v node >/dev/null 2>&1 || ! node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 16) ? 0 : 1)'; then
+              echo "Node.js 22.16 or newer is required for knowledge backups." >&2
+              exit 1
             fi
             NODE_BIN="$(command -v node)"
+            "$NODE_BIN" -e 'const { DatabaseSync, backup } = require("node:sqlite"); const db = new DatabaseSync(":memory:"); db.exec("CREATE VIRTUAL TABLE probe USING fts5(content, tokenize=trigram)"); if (typeof backup !== "function") process.exit(1); db.close()'
 
-            sudo tee "/etc/systemd/system/${SERVICE_NAME}.service" > /dev/null <<SYSTEMD
+            tar -xzf "$ARCHIVE" -C "$RELEASE_DIR"
+            test -f "${RELEASE_DIR}/dist/server.js"
+            "$NODE_BIN" "${RELEASE_DIR}/scripts/backup-knowledge.mjs" "$KNOWLEDGE_DIR" "${APP_DIR}/shared/knowledge-backups"
+            "$NODE_BIN" --input-type=module -e 'import { pathToFileURL } from "node:url"; const { KnowledgeStore } = await import(pathToFileURL(process.argv[1])); const store = new KnowledgeStore(process.argv[2]); store.close();' \
+              "${RELEASE_DIR}/dist/knowledge/knowledge-store.js" "$KNOWLEDGE_DIR"
+
+            PREVIOUS="$(readlink -f "${APP_DIR}/current" || true)"
+            UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+            UNIT_BACKUP="$(mktemp -d)"
+            if sudo test -f "$UNIT_FILE"; then sudo cp -p "$UNIT_FILE" "${UNIT_BACKUP}/previous.service"; fi
+            rollback() {
+              result=$?
+              trap - EXIT
+              set +e
+              if [ "$result" -ne 0 ] && [ -d "$PREVIOUS" ] && sudo test -f "${UNIT_BACKUP}/previous.service"; then
+                echo "Gateway verification failed. Restoring the previous release."
+                sudo cp -p "${UNIT_BACKUP}/previous.service" "$UNIT_FILE"
+                sudo ln -s "$PREVIOUS" "${APP_DIR}/.rollback-${RELEASE_ID}"
+                sudo mv -Tf "${APP_DIR}/.rollback-${RELEASE_ID}" "${APP_DIR}/current"
+                sudo systemctl daemon-reload
+                sudo systemctl restart "$SERVICE_NAME"
+              fi
+              sudo rm -f "${UNIT_BACKUP}/previous.service"
+              rmdir "$UNIT_BACKUP"
+              rm -f "$ARCHIVE"
+              exit "$result"
+            }
+            trap rollback EXIT
+
+            sudo tee "$UNIT_FILE" > /dev/null <<SYSTEMD
             [Unit]
             Description=TRPG AI Gateway
             After=network.target
@@ -140,7 +175,7 @@ jobs:
             Environment=CONTENT_UPLOAD_BASE_URL=/content-assets
             Environment=CONTENT_MAX_UPLOAD_BYTES=10485760
             Environment=CONTENT_MAX_IMPORT_BYTES=268435456
-            ExecStart=${NODE_BIN} dist/server.js
+            ExecStart=/usr/bin/env NODE_ENV=production KNOWLEDGE_ROOT_DIR=${KNOWLEDGE_DIR} ${NODE_BIN} dist/server.js
             Restart=always
             RestartSec=3
             User=${{ secrets.SERVER_USER }}
@@ -150,7 +185,18 @@ jobs:
             WantedBy=multi-user.target
             SYSTEMD
 
+            sudo ln -s "$RELEASE_DIR" "${APP_DIR}/.current-${RELEASE_ID}"
+            sudo mv -Tf "${APP_DIR}/.current-${RELEASE_ID}" "${APP_DIR}/current"
             sudo systemctl daemon-reload
             sudo systemctl enable "$SERVICE_NAME"
             sudo systemctl restart "$SERVICE_NAME"
-            sudo systemctl status "$SERVICE_NAME" --no-pager
+            for attempt in $(seq 1 15); do
+              if curl -fsS --max-time 2 http://127.0.0.1:3001/health >/dev/null; then
+                test "$(curl -sS --max-time 2 -o /dev/null -w '%{http_code}' http://127.0.0.1:3001/api/knowledge/worlds)" = 401
+                sudo systemctl is-active "$SERVICE_NAME"
+                exit 0
+              fi
+              sleep 2
+            done
+            echo "Gateway did not become healthy." >&2
+            exit 1

@@ -28,6 +28,7 @@ import { requireQqChatbotInternalToken } from "./qq/qq-chatbot-auth.js";
 import { extractQqChatbotPortrait } from "./qq/qq-chatbot-portrait.js";
 import { resolveNpcProfileByName, resolvePlayerIdByName, resolveQqPlayerId } from "./qq/qq-chatbot-resolver.js";
 import { KeyedSerialQueue } from "./queue/keyed-queue.js";
+import type { KnowledgeStore } from "./knowledge/knowledge-store.js";
 import { WorkbenchStore } from "./workbench/workbench-store.js";
 import type { AiProvider, ChatRequest, ChatResponse } from "./types.js";
 
@@ -282,6 +283,20 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
   const contentQueue = new KeyedSerialQueue();
   const workbenchStore = options.workbenchStore ?? new WorkbenchStore(config.workbenchRootDir, config.tokenHashPepper);
   const workbenchQueue = new KeyedSerialQueue();
+  let knowledge: Promise<KnowledgeStore> | undefined;
+
+  // 在第一次有需要的请求中加载数据库。并发请求共用初始化结果，出错后允许下次重试。
+  async function getKnowledgeStore() {
+    const root = config.knowledgeRootDir;
+    if (!root) return undefined;
+    knowledge ??= import("./knowledge/knowledge-store.js").then(({ KnowledgeStore }) => new KnowledgeStore(root)).catch((error: unknown) => {
+      knowledge = undefined;
+      console.error("Knowledge database initialization failed", error instanceof Error ? error.name : "error");
+      throw Object.assign(new Error("知识库存储暂时不可用。"), { statusCode: 503 });
+    });
+    return knowledge;
+  }
+
 
   async function runNpcChat(
     npcId: string,
@@ -326,7 +341,7 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
     return { content: assistantContent };
   }
 
-  return createServer(async (request, response) => {
+  const server = createServer(async (request, response) => {
     const corsHeaders = buildCorsHeaders(request, config.allowedOrigin);
 
     try {
@@ -341,15 +356,64 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
 
       if (request.method === "GET" && url.pathname === "/api/portfolio") {
         const data = await workbenchQueue.run("workbench", () => workbenchStore.read());
-        writeJson(response, 200, data.works.filter((work) => work.status === "published").map(({ body, ...summary }) => summary), corsHeaders);
+        const summaries = data.works.filter((work) => work.status === "published").map(({ body, ...summary }) => summary);
+        // 同一作品集展示原工作台作品与知识库公开快照。知识库暂时不可用时仍可列出原有作品。
+        const publications = await getKnowledgeStore().then((store) => store?.listPublications() ?? []).catch(() => []);
+        writeJson(response, 200, [...summaries, ...publications], corsHeaders);
         return;
       }
 
       const publicWorkMatch = rawPath.match(/^\/api\/portfolio\/([a-zA-Z0-9_-]+)$/);
       if (request.method === "GET" && publicWorkMatch) {
+        // kb- 开头的链接读取公开快照。游客直接访问这个入口即可阅读。
+        if (/^kb-[a-f0-9]{32}$/.test(publicWorkMatch[1])) {
+          const publication = await getKnowledgeStore().then((store) => store?.getPublication(publicWorkMatch[1].slice(3))).catch(() => undefined);
+          if (publication) {
+            writeJson(response, 200, publication, corsHeaders);
+            return;
+          }
+        }
         const data = await workbenchQueue.run("workbench", () => workbenchStore.read());
         const work = data.works.find((item) => item.id === publicWorkMatch[1] && item.status === "published");
         writeJson(response, work ? 200 : 404, work ?? { error: "not_found" }, corsHeaders);
+        return;
+      }
+
+      if (url.pathname === "/api/knowledge" || url.pathname.startsWith("/api/knowledge/")) {
+        const authorization = request.headers.authorization;
+        if (!authorization) { writeJson(response, 401, { error: "需要知识库凭据。" }, corsHeaders); return; }
+        // 维护者沿用站点 KP 身份。rag_ 凭据交给世界观接口核对权限，保持独立的授权范围。
+        const isAgentToken = /^Bearer rag_[a-f0-9]{64}$/i.test(authorization);
+        const keeper = !isAgentToken && authenticate(request, config)?.isKeeper === true;
+        if (!keeper && !isAgentToken) {
+          writeJson(response, 403, { error: "需要维护者权限。" }, corsHeaders);
+          return;
+        }
+        const store = await getKnowledgeStore();
+        if (!store) { writeJson(response, 503, { error: "此环境尚未启用知识库存储。" }, corsHeaders); return; }
+        const { routeKnowledge } = await import("./knowledge/knowledge-routes.js");
+        try {
+          await routeKnowledge({
+            store, request, pathname: url.pathname, keeper,
+            json: async () => {
+              // 先限制收到的字节数，再解析 JSON，避免把超大请求读进服务器内存。
+              const importLimit = 8 * 1024 * 1024 + 1024;
+              const limit = url.pathname === "/api/knowledge/worlds/import" ? importLimit : 1024 * 1024;
+              const bytes = await readBoundedBody(request, limit);
+              try { return JSON.parse(Buffer.from(bytes).toString("utf8")); }
+              catch { throw Object.assign(new Error("请求须包含有效 JSON。"), { statusCode: 400 }); }
+            },
+            send: (status, data) => writeJson(response, status, data, corsHeaders)
+          });
+        } catch (error) {
+          // 校验失败可以把原因告诉用户。存储故障只返回通用提示，具体错误类别记入服务日志。
+          if (error instanceof Error && "statusCode" in error) {
+            writeJson(response, Number(error.statusCode), { error: error.message }, corsHeaders);
+          } else {
+            console.error("Knowledge API failed", error instanceof Error ? error.name : "error");
+            writeJson(response, 503, { error: "知识库存储暂时不可用，请稍后重试。" }, corsHeaders);
+          }
+        }
         return;
       }
 
@@ -730,6 +794,11 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
       );
     }
   });
+  // HTTP 服务关闭时释放知识库的目录连接，测试也可以关闭后重新打开原数据目录。
+  server.once("close", () => {
+    void knowledge?.then((store) => { store.close(); }).catch(() => {});
+  });
+  return server;
 }
 
 if (process.env.NODE_ENV !== "test") {
