@@ -1,4 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { readdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { authenticateBearerToken, type AuthSession } from "./auth/tokens.js";
 import { createOpenAiCompatibleProvider } from "./ai/openai-compatible.js";
 import { ContentStore } from "./content/content-store.js";
@@ -413,6 +415,35 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
             console.error("Knowledge API failed", error instanceof Error ? error.name : "error");
             writeJson(response, 503, { error: "知识库存储暂时不可用，请稍后重试。" }, corsHeaders);
           }
+        }
+        return;
+      }
+
+      if (url.pathname === "/api/admin/reader-books" || url.pathname.startsWith("/api/admin/reader-books/")) {
+        const session = authenticate(request, config);
+        if (!session) { writeJson(response, 401, { error: "unauthorized" }, corsHeaders); return; }
+        requireKeeperSession(session);
+        if (request.method !== "GET") { writeJson(response, 405, { error: "method_not_allowed" }, corsHeaders); return; }
+        const root = join(config.workbenchRootDir, "reader-books");
+        try {
+          if (url.pathname === "/api/admin/reader-books") {
+            const dirs = await readdir(root, { withFileTypes: true }).catch((err: NodeJS.ErrnoException) => {
+              if (err.code === "ENOENT") return [];
+              throw err;
+            });
+            const books = await Promise.all(dirs.filter(dir => dir.isDirectory() && /^[a-f0-9]{64}$/.test(dir.name))
+              .map(async dir => JSON.parse(await readFile(join(root, dir.name, "book.json"), "utf8"))));
+            writeJson(response, 200, books, corsHeaders);
+          } else {
+            const id = url.pathname.slice("/api/admin/reader-books/".length);
+            if (!/^[a-f0-9]{64}$/.test(id)) { writeJson(response, 404, { error: "not_found" }, corsHeaders); return; }
+            const bytes = await readFile(join(root, id, "body.bin"));
+            response.writeHead(200, { ...corsHeaders, "content-type": "application/octet-stream", "cache-control": "private, no-store", "x-content-type-options": "nosniff" });
+            response.end(bytes);
+          }
+        } catch (err) {
+          const missing = (err as NodeJS.ErrnoException).code === "ENOENT";
+          writeJson(response, missing ? 404 : 500, { error: missing ? "not_found" : "library_unavailable" }, corsHeaders);
         }
         return;
       }
