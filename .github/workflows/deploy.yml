@@ -4,6 +4,20 @@ on:
   push:
     branches: [main, master]
   workflow_dispatch:
+    inputs:
+      operation:
+        type: choice
+        description: 发布或知识库运维
+        default: deploy
+        options:
+          - deploy
+          - prepare-import
+          - import
+          - verify
+      prepare_transfer:
+        type: boolean
+        description: 发布成功后准备一次性知识库传输公钥
+        default: false
 
 concurrency:
   group: trpg-ai-gateway-production
@@ -16,6 +30,7 @@ env:
 
 jobs:
   build-and-deploy:
+    if: github.event_name == 'push' || inputs.operation == 'deploy'
     runs-on: ubuntu-latest
 
     steps:
@@ -194,9 +209,50 @@ jobs:
               if curl -fsS --max-time 2 http://127.0.0.1:3001/health >/dev/null; then
                 test "$(curl -sS --max-time 2 -o /dev/null -w '%{http_code}' http://127.0.0.1:3001/api/knowledge/worlds)" = 401
                 sudo systemctl is-active "$SERVICE_NAME"
+                if [ "${{ inputs.prepare_transfer }}" = "true" ]; then
+                  "$NODE_BIN" "${RELEASE_DIR}/scripts/knowledge-transfer.mjs" prepare "$KNOWLEDGE_DIR" \
+                    || echo "Transfer preparation failed. Run prepare-import to retry."
+                fi
                 exit 0
               fi
               sleep 2
             done
             echo "Gateway did not become healthy." >&2
             exit 1
+
+  knowledge-operations:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.operation != 'deploy'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Execute authorized knowledge operation
+        uses: appleboy/ssh-action@v1
+        env:
+          KNOWLEDGE_OPERATION: ${{ inputs.operation }}
+          KNOWLEDGE_TRANSFER_ENVELOPE: ${{ secrets.KNOWLEDGE_TRANSFER_ENVELOPE }}
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          envs: KNOWLEDGE_OPERATION,KNOWLEDGE_TRANSFER_ENVELOPE
+          script: |
+            set -eu
+            APP_DIR="${{ env.AI_GATEWAY_APP_DIR }}"
+            ROOT="${APP_DIR}/shared/knowledge"
+            exec 9>"${APP_DIR}/.deploy.lock"
+            flock -w 120 9
+            cd "${APP_DIR}/current"
+            case "$KNOWLEDGE_OPERATION" in
+              prepare-import)
+                node scripts/knowledge-transfer.mjs prepare "$ROOT"
+                ;;
+              import)
+                node scripts/backup-knowledge.mjs "$ROOT" "${APP_DIR}/shared/knowledge-backups"
+                node scripts/knowledge-transfer.mjs import "$ROOT"
+                node scripts/backup-knowledge.mjs "$ROOT" "${APP_DIR}/shared/knowledge-backups"
+                ;;
+              verify)
+                node scripts/knowledge-transfer.mjs verify "$ROOT"
+                ;;
+              *) exit 2 ;;
+            esac
