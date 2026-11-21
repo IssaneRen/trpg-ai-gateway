@@ -285,6 +285,15 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
   const contentQueue = new KeyedSerialQueue();
   const workbenchStore = options.workbenchStore ?? new WorkbenchStore(config.workbenchRootDir, config.tokenHashPepper);
   const workbenchQueue = new KeyedSerialQueue();
+  let music: Promise<import("./music/music-library.js").MusicLibrary> | undefined;
+  function musicLibrary() {
+    music ??= import("./music/music-library.js").then(({ MusicLibrary }) =>
+      new MusicLibrary(join(config.workbenchRootDir, "music"))).catch(() => {
+      music = undefined;
+      throw Object.assign(new Error("公开曲库暂不可用。"), { statusCode: 503 });
+    });
+    return music;
+  }
   let knowledge: Promise<KnowledgeStore> | undefined;
 
   // 在第一次有需要的请求中加载数据库。并发请求共用初始化结果，出错后允许下次重试。
@@ -356,6 +365,24 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
         return;
       }
 
+      const musicPath = /^\/api\/music\/songs(?:\/(\d{1,15}))?$/.exec(url.pathname);
+      if (musicPath && request.method === "GET") {
+        const library = await musicLibrary();
+        const data = musicPath[1] ? library.read(Number(musicPath[1])) :
+          library.list(Number(url.searchParams.get("before") || Number.MAX_SAFE_INTEGER));
+        writeJson(response, data ? 200 : 404, data ?? { error: "曲目不存在。" }, corsHeaders);
+        return;
+      }
+      if (url.pathname === "/api/music/songs" && request.method === "POST") {
+        const session = authenticate(request, config);
+        if (!session) { writeJson(response, 401, { error: "请先登录。" }, corsHeaders); return; }
+        const bytes = await readBoundedBody(request, 512 * 1024);
+        let score: unknown;
+        try { score = JSON.parse(Buffer.from(bytes).toString("utf8")); }
+        catch { throw Object.assign(new Error("曲谱 JSON 无效。"), { statusCode: 400 }); }
+        writeJson(response, 200, (await musicLibrary()).save(session.playerId, score), corsHeaders);
+        return;
+      }
       if (request.method === "GET" && url.pathname === "/api/portfolio") {
         const data = await workbenchQueue.run("workbench", () => workbenchStore.read());
         const summaries = data.works.filter((work) => work.status === "published").map(({ body, ...summary }) => summary);
@@ -827,6 +854,7 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
   });
   // HTTP 服务关闭时释放知识库的目录连接，测试也可以关闭后重新打开原数据目录。
   server.once("close", () => {
+    void music?.then(store => store.close()).catch(() => {});
     void knowledge?.then((store) => { store.close(); }).catch(() => {});
   });
   return server;

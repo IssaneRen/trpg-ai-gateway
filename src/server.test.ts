@@ -469,6 +469,28 @@ async function withServer<T>(
   }
 }
 
+describe("public music library", () => {
+  it("keeps published scores across restarts, deduplicates retries and requires a session to publish", async () => {
+    const fixture = createFixture({ workbenchRootDir: mkdtempSync(join(tmpdir(), "music-test-")) });
+    const inst = { name: "Bass", wave: "triangle", duty: .5, attack: 0, decay: 0, sustain: 15, release: 3, volume: 15, sweep: 0, vibDepth: 0, vibSpeed: 4, arp: null, noiseShort: false };
+    const score = { format: "chiptune-studio", version: 1, title: "测试曲", bpm: 125, speed: 6, instruments: [inst], order: [0],
+      patterns: [{ rows: 1, cells: [Array(4).fill([48, 0, null, null, null])] }] };
+    const path = "/api/music/songs";
+    await withServer(fixture.config, new FakeProvider(), async base => {
+      const post = (token: string, body: unknown) => fetch(base + path, { method: "POST", headers: token ? { authorization: "Bearer " + token } : {}, body: JSON.stringify(body) });
+      expect((await post("", score)).status).toBe(401);
+      expect((await post("invalid-token", score)).status).toBe(401);
+      expect((await post("cici-token", {})).status).toBe(400);
+      expect((await post("cici-token", score)).status).toBe(200);
+      expect((await post("cici-token", score)).status).toBe(200);
+    });
+    await withServer(fixture.config, new FakeProvider(), async base => {
+      expect(await (await fetch(base + path)).json()).toEqual({ songs: [{ id: 1, title: score.title }], more: false });
+      expect(await (await fetch(base + path + "/1")).json()).toEqual(score);
+    });
+  });
+});
+
 describe("private reader library", () => {
   it("requires a keeper for the catalog and the file", async () => {
     const fixture = createFixture();
