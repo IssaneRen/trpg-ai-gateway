@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { randomInt } from "node:crypto";
 import { reject } from "../auth/accounts.js";
 
-export type Article = {id:string; title:string; account:string; reads:number|null; url:string; evidence:string|null; paragraphs?:string[]; license?:string};
+export type Article = {id:string; title:string; account:string; reads:number|null; url:string; evidence:string|null; inlineLinks?:unknown; illustrations?:unknown; paragraphs?:string[]; license?:string};
 type Input = Record<string, unknown>;
 function stringField(value:unknown, max:number, label:string) {
   if(typeof value!=="string" || !value.trim() || value.length>max) reject(400,label+"格式错误");
@@ -16,7 +16,7 @@ function entryKey(value:unknown) {
 }
 export class ReadingCommunity {
   private readonly articles:Map<string,Article>;
-  constructor(private readonly db:DatabaseSync, articles:Article[]=["articles","open"].flatMap(name=>JSON.parse(readFileSync(new URL("../../data/reading/"+name+".json",import.meta.url),"utf8")))) {
+  constructor(private readonly db:DatabaseSync, articles:Article[]=["articles","open","weekly","linux"].flatMap(name=>JSON.parse(readFileSync(new URL("../../data/reading/"+name+".json",import.meta.url),"utf8")))) {
     this.articles=new Map(articles.map(a=>[a.id,a]));
     db.exec(`
       CREATE TABLE IF NOT EXISTS book_reviews(owner TEXT, id TEXT, book TEXT NOT NULL,title TEXT NOT NULL,body TEXT NOT NULL,updated TEXT NOT NULL,PRIMARY KEY(owner,id));
@@ -25,15 +25,18 @@ export class ReadingCommunity {
       CREATE TABLE IF NOT EXISTS article_positions(owner TEXT PRIMARY KEY,article TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS article_marks(owner TEXT,article TEXT,paragraph INTEGER,start INTEGER,quote TEXT,created TEXT NOT NULL,PRIMARY KEY(owner,article,paragraph,start,quote));
     `);
+    if (!db.prepare("PRAGMA table_info(article_votes)").all().some(column=>column.name==="pool")) {
+      db.exec("ALTER TABLE article_votes ADD COLUMN pool TEXT");
+    }
   }
   private next(owner:string, mode:string|null) {
-    const full=mode!=="all";
-    const position=owner+(full?":full":":all");
-    const eligible=[...this.articles.values()].filter(a=>!full||a.paragraphs?.length);
+    const pool=mode==="all" || mode==="popular" ? mode : "full";
+    const position=owner+":"+pool;
+    const eligible=[...this.articles.values()].filter(a=>pool==="all" || (pool==="popular" ? (a.reads??0)>=10000 : a.paragraphs?.length));
     const voted=new Set(this.db.prepare("SELECT article FROM article_votes WHERE owner=?").all(owner).map(r=>r.article));
     const saved=this.db.prepare("SELECT article FROM article_positions WHERE owner=?").get(position);
     let article=this.articles.get(String(saved?.article));
-    if(!article || voted.has(article.id) || (full&&!article.paragraphs?.length)) {
+    if(!article || voted.has(article.id) || !eligible.some(a=>a.id===article?.id)) {
       const pool=eligible.filter(a=>!voted.has(a.id));
       article=pool.length?pool[randomInt(pool.length)]:undefined;
       if(article)this.db.prepare("INSERT OR REPLACE INTO article_positions VALUES(?,?)").run(position,article.id);
@@ -44,7 +47,7 @@ export class ReadingCommunity {
     if(path==="/next" && method==="GET")return this.next(owner,params.get("pool"));
     if(path==="/export" && method==="GET"){
       if(!admin)reject(403,"需要管理员");
-      return {version:1,exportedAt:new Date().toISOString(),articles:[...this.articles.values()].map(({paragraphs,...metadata})=>metadata),votes:this.db.prepare("SELECT * FROM article_votes ORDER BY created").all(),marks:this.db.prepare("SELECT * FROM article_marks ORDER BY created").all()};
+      return {version:1,exportedAt:new Date().toISOString(),articles:[...this.articles.values()],votes:this.db.prepare("SELECT * FROM article_votes ORDER BY created").all(),marks:this.db.prepare("SELECT * FROM article_marks ORDER BY created").all()};
     }
     if((path==="/vote" || path==="/mark") && method==="POST"){
       const article=this.articles.get(String(body.article));
@@ -53,7 +56,9 @@ export class ReadingCommunity {
       if(path==="/vote"){
         const verdict=String(body.verdict);
         if(!["like","dislike","ai"].includes(verdict))reject(400,"未知评价");
-        this.db.prepare("INSERT INTO article_votes VALUES(?,?,?,?) ON CONFLICT(owner,article) DO NOTHING").run(owner,article.id,verdict,date);
+        const pool=params.get("pool");
+        this.db.prepare("INSERT INTO article_votes(owner,article,verdict,created,pool) VALUES(?,?,?,?,?) ON CONFLICT(owner,article) DO NOTHING")
+          .run(owner,article.id,verdict,date,pool==="all"||pool==="popular"?pool:"full");
         return this.next(owner,params.get("pool"));
       }
       const quote=stringField(body.quote,600,"选段"), paragraph=Number(body.paragraph),start=Number(body.start);
