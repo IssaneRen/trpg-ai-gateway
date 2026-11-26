@@ -1,5 +1,6 @@
 import { existsSync, readlinkSync } from "node:fs";
 import { readReport, readReportImage } from "./content/report-access.js";
+import { ReadingCommunity } from "./reading/community.js";
 import { Accounts, reject } from "./auth/accounts.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readdir, readFile } from "node:fs/promises";
@@ -357,6 +358,7 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
 
   let opening: Promise<Accounts> | undefined;
   let accounts: Accounts | undefined;
+  let reading: ReadingCommunity | undefined;
   const accountStore = () =>
     (opening ??= Accounts.open(config)
       .then((db) => (accounts = db))
@@ -564,6 +566,19 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
         return;
       }
 
+      if (url.pathname.startsWith("/api/reading/")) {
+        const store = await accountStore();
+        const user = store.current(sessionKey(request) || "");
+        if (!user) reject(401, "请先登录");
+        reading ??= new ReadingCommunity(store.db);
+        const method = request.method || "GET";
+        const data = method === "POST" || method === "PUT"
+          ? JSON.parse(Buffer.from(await readBoundedBody(request, 32768)).toString("utf8")) : {};
+        if (!data || typeof data !== "object" || Array.isArray(data)) reject(400, "需要 JSON 对象");
+        const result = reading.route(url.pathname.slice("/api/reading".length), method, url.searchParams, String(user.playerId), user.role === "admin", data);
+        writeJson(response, 200, result, corsHeaders);
+        return;
+      }
       const musicPath = /^\/api\/music\/songs(?:\/(\d{1,15}))?$/.exec(url.pathname);
       if (musicPath && request.method === "GET") {
         const library = await musicLibrary();
