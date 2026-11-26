@@ -1,5 +1,6 @@
 import { existsSync, readlinkSync } from "node:fs";
 import { readReport, readReportImage } from "./content/report-access.js";
+import { ModuleDiary } from "./modules/diary.js";
 import { ReadingCommunity } from "./reading/community.js";
 import { Accounts, reject } from "./auth/accounts.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -358,6 +359,7 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
 
   let opening: Promise<Accounts> | undefined;
   let accounts: Accounts | undefined;
+  let diary: ModuleDiary | undefined;
   let reading: ReadingCommunity | undefined;
   const accountStore = () =>
     (opening ??= Accounts.open(config)
@@ -566,6 +568,31 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
         return;
       }
 
+      if (url.pathname === "/api/module-diary") {
+        const store = await accountStore();
+        const user = store.current(sessionKey(request) || "");
+        if (!user) reject(401, "请先登录");
+        diary ??= new ModuleDiary(store.db);
+        const source = "/etc/nginx/snippets/trpg-content-active.conf";
+        const root = existsSync(source) && readlinkSync(source).endsWith("/trpg-content-release.conf")
+          ? "/var/www/trpg-helper/current" : config.contentRootDir;
+        const modules: {id:string}[] = JSON.parse(await readFile(join(root,"wiki/entities/modules.json"),"utf8"));
+        const owner=String(user.playerId);
+        if (request.method !== "GET") {
+          const id = url.searchParams.get("id") || "";
+          if (!modules.some(m=>m.id===id)) reject(404,"模组不存在");
+          if (request.method === "DELETE") diary.remove(owner,id);
+          else if (request.method === "PUT") {
+            let body;
+            try { body = JSON.parse(Buffer.from(await readBoundedBody(request,16384)).toString("utf8")); }
+            catch (err) { if (!(err instanceof SyntaxError)) throw err; reject(400,"JSON 格式错误"); }
+            if (!body || typeof body!=="object" || Array.isArray(body)) reject(400,"需要 JSON 对象");
+            diary.record(owner,id,body);
+          } else reject(405,"不支持的请求");
+        }
+        writeJson(response,200,{version:1,exportedAt:new Date().toISOString(),modules,records:diary.records()},corsHeaders);
+        return;
+      }
       if (url.pathname.startsWith("/api/reading/")) {
         const store = await accountStore();
         const user = store.current(sessionKey(request) || "");
