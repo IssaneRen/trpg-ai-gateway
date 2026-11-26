@@ -134,6 +134,21 @@ function validateWikiEntry(value: unknown): asserts value is WikiEntryDocument {
   requireString(entry.createdAt, "Wiki createdAt");
   requireString(entry.updatedAt, "Wiki updatedAt");
   if (!Array.isArray(entry.content)) throw new Error("Wiki content 必须是数组");
+  if (entry.category === "report" && !entry.id?.startsWith("report.")) throw new Error("战报 ID 必须以 report. 开头");
+  if (entry.id?.startsWith("report.")) {
+    const validateImages = (blocks: unknown[], hidden: boolean) => {
+      for (const value of blocks) {
+        if (!value || typeof value !== "object") continue;
+        const block = value as Record<string, unknown>;
+        const restricted = hidden || block.type === "secret-panel";
+        if (restricted && block.type === "image" && !/^\/blog\/images\/report-[a-z0-9_-]+\/[a-z0-9._-]+\.(png|jpe?g|webp|gif|avif)$/i.test(String(block.src))) {
+          throw new Error("请在战报编辑器上传加密图片，以便按账号控制原图访问。");
+        }
+        if (Array.isArray(block.blocks)) validateImages(block.blocks, restricted);
+      }
+    };
+    validateImages(entry.content, false);
+  }
 }
 
 function validateNamedEntities(value: unknown, label: string): asserts value is Array<{
@@ -466,12 +481,12 @@ export class ContentStore {
     const year = String(now.getUTCFullYear());
     const month = String(now.getUTCMonth() + 1).padStart(2, "0");
     const fileName = `${safeBase}-${randomUUID()}${extension}`;
-    const directory = join(this.options.uploadRootDir, year, month);
+    const directory = input.report ? join(this.blogRoot,"images","report-uploads") : join(this.options.uploadRootDir, year, month);
     await mkdir(directory, { recursive: true });
     const absolutePath = join(directory, fileName);
     await writeFile(absolutePath, input.bytes, { flag: "wx" });
     return {
-      url: `${this.options.publicUploadBaseUrl.replace(/\/+$/, "")}/${year}/${month}/${fileName}`,
+      url: input.report ? `/blog/images/report-uploads/${fileName}` : `${this.options.publicUploadBaseUrl.replace(/\/+$/, "")}/${year}/${month}/${fileName}`,
       absolutePath,
       size: input.bytes.byteLength,
       mimeType: input.mimeType

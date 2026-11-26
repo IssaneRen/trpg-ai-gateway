@@ -1329,3 +1329,80 @@ describe("createApp auth and npc chat APIs", () => {
     });
   });
 });
+
+describe("统一账号", () => {
+  it("按旧 PL 身份登录，区分访客与管理员，重启不会重置密码或恢复删号", async () => {
+    const fixture = createFixture();
+    const account = "/api/account";
+    const json = { "content-type": "application/json" };
+    let cookie = "";
+    let kp = "";
+    await withServer(fixture.config, new FakeProvider(), async base => {
+      const post = (path: string, body: unknown, headers: Record<string, string> = {}) =>
+        fetch(base + account + path, { method: "POST", headers: { ...json, ...headers }, body: JSON.stringify(body) });
+      expect((await fetch(base + account + "/keeper")).status).toBe(401);
+      expect((await post("/login", { id: "kp", password: "123456" })).status).toBe(401);
+      const logged = await post("/login", { id: "pl.cici", password: "123456" });
+      const header = logged.headers.get("set-cookie")!;
+      expect(header).toContain("HttpOnly");
+      expect(header).toContain("Secure");
+      cookie = header.split(";")[0];
+      const get = (path: string) => fetch(base + path, { headers: { cookie } });
+      expect(await (await get(account + "/me")).json()).toMatchObject({ id: "pl.cici", nickname: "Cici", role: "registered" });
+      expect((await get(account + "/users")).status).toBe(403);
+      expect((await get(account + "/keeper")).status).toBe(403);
+      expect((await get("/api/admin/reader-books")).status).toBe(403);
+      expect((await get("/api/npcs")).status).toBe(200);
+      expect((await post("/setup", { password: "personal" }, { cookie })).status).toBe(403);
+      const setup = await post("/setup", { password: "personal" }, { authorization: "Bearer " + keeperToken });
+      kp = setup.headers.get("set-cookie")!.split(";")[0];
+      expect((await fetch(base + account + "/keeper", { headers: { cookie: kp } })).status).toBe(200);
+      expect((await post("/users", { id: "PL.CICI", nickname: "同名", password: "initial" }, { cookie: kp })).status).toBe(409);
+      expect((await post("/users", { id: "reader1", nickname: "读者", password: "initial" }, { cookie: kp })).status).toBe(200);
+      const edit = (body: unknown) => fetch(base + account + "/me", { method: "PUT", headers: { ...json, cookie }, body: JSON.stringify(body) });
+      expect((await edit({ nickname: "新昵称", avatar: "" })).status).toBe(200);
+      expect(await (await get(account + "/me")).json()).toMatchObject({ id: "pl.cici", nickname: "新昵称" });
+      const chat = await fetch(base + "/api/chat", { method: "POST", headers: { ...json, cookie }, body: JSON.stringify({ npcId: "char.claire", message: "个人会话" }) });
+      expect(chat.status).toBe(200);
+      expect(await (await get("/api/chat/history?npcId=char.claire")).text()).toContain("个人会话");
+      const other = (await post("/login", { id: "pl.leina", password: "123456" })).headers.get("set-cookie")!.split(";")[0];
+      expect(await (await fetch(base + "/api/chat/history?npcId=char.claire", {headers:{cookie:other}})).text()).not.toContain("个人会话");
+      expect((await edit({ nickname: "新昵称", avatar: "", password: "changed" })).status).toBe(200);
+      expect((await get(account + "/me")).status).toBe(401);
+      expect((await fetch(base + account + "/users/pl.leina", { method: "DELETE", headers: { cookie: kp } })).status).toBe(200);
+      expect((await fetch(base + account + "/me", { headers: { cookie: other } })).status).toBe(401);
+    });
+    await withServer(fixture.config, new FakeProvider(), async base => {
+      const login = (id: string, password: string) => fetch(base + account + "/login", { method: "POST", headers: json, body: JSON.stringify({ id, password }) });
+      expect((await login("pl.leina", "123456")).status).toBe(401);
+      expect((await login("pl.cici", "123456")).status).toBe(401);
+      expect((await login("pl.cici", "changed")).status).toBe(200);
+      expect((await fetch(base + account + "/logout",{method:"POST",headers:{cookie:kp}})).status).toBe(200);
+      expect((await fetch(base + account + "/keeper",{headers:{cookie:kp}})).status).toBe(401);
+    });
+  });
+
+  it("逐段检查战报授权，正文与图片共用同一账号 ID", async () => {
+    const fixture = createFixture();
+    const path = "/blog/images/report-day/detail.jpg";
+    const doc = { content: [{ type: "secret-panel", playerIds: ["pl.cici"], blocks: [
+      { type: "image", src: path }, { type: "secret-inline", playerIds: [], text: "仅管理员" },
+    ] }] };
+    writeFileSync(join(fixture.contentRootDir, "wiki/entities/entries/report.day.json"), JSON.stringify(doc));
+    mkdirSync(join(fixture.contentRootDir,"blog/images/report-day"),{recursive:true});
+    writeFileSync(join(fixture.contentRootDir,path),"image");
+    await withServer(fixture.config, new FakeProvider(), async base => {
+      const entry = base + "/wiki/entities/entries/report.day.json";
+      expect(await (await fetch(entry)).text()).not.toContain("detail.jpg");
+      expect((await fetch(base + path)).status).toBe(401);
+      for (const [id, granted] of [["pl.cici", true], ["pl.leina", false]] as const) {
+        const login = await fetch(base + "/api/account/login", {method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify({id,password:"123456"})});
+        const headers = {cookie:login.headers.get("set-cookie")!.split(";")[0]};
+        const body = await (await fetch(entry,{headers})).text();
+        expect(body.includes("detail.jpg")).toBe(granted);
+        expect(body).not.toContain("仅管理员");
+        expect((await fetch(base+path,{headers})).status).toBe(granted ? 200 : 403);
+      }
+    });
+  });
+});

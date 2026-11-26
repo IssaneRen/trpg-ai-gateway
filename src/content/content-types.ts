@@ -60,6 +60,7 @@ export interface ContentDeleteResult {
 }
 
 export interface ImageUploadInput {
+  report?: boolean;
   fileName: string;
   mimeType: string;
   bytes: Uint8Array;

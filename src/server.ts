@@ -1,3 +1,6 @@
+import { existsSync, readlinkSync } from "node:fs";
+import { readReport, readReportImage } from "./content/report-access.js";
+import { Accounts, reject } from "./auth/accounts.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -191,7 +194,7 @@ function validateQqChatbotMemoryBody(value: unknown): {
   };
 }
 
-function authenticate(request: IncomingMessage, config: RuntimeConfig): AuthSession | undefined {
+function legacySession(request: IncomingMessage, config: RuntimeConfig): AuthSession | undefined {
   return authenticateBearerToken(
     request.headers.authorization,
     config.tokenHashRecords,
@@ -352,16 +355,212 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
     return { content: assistantContent };
   }
 
+  let opening: Promise<Accounts> | undefined;
+  let accounts: Accounts | undefined;
+  const accountStore = () =>
+    (opening ??= Accounts.open(config)
+      .then((db) => (accounts = db))
+      .catch((error) => {
+        opening = undefined;
+        throw error;
+      }));
+  const sessionKey = (req: IncomingMessage) =>
+    /(?:^|; *)__Host-issane=([a-f0-9]{64})(?:;|$)/.exec(
+      req.headers.cookie || "",
+    )?.[1];
+  const authenticate = (
+    req: IncomingMessage,
+    cfg: RuntimeConfig,
+  ): AuthSession | undefined => {
+    const key = sessionKey(req);
+    if (key) {
+      const user = accounts?.current(key);
+      if (user)
+        return {
+          playerId: String(user.playerId),
+          displayName: String(user.displayName),
+          isKeeper: user.role === "admin",
+        };
+    }
+    if (key || req.headers.authorization === "Bearer site-session")
+      return undefined;
+    const legacy = legacySession(req, cfg);
+    if (legacy && !legacy.isKeeper && accounts) return undefined;
+    return legacy;
+  };
+  const activePlayers = () =>
+    accounts
+      ? accounts
+          .list()
+          .filter((row) => row.role !== "admin")
+          .map((row) => ({ id: String(row.id), name: String(row.nickname) }))
+      : playerDirectory(config);
+  const attempts = new Map<string, { n: number; until: number }>();
   const server = createServer(async (request, response) => {
     const corsHeaders = buildCorsHeaders(request, config.allowedOrigin);
 
     try {
-      const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
+      const url = new URL(
+        request.url ?? "/",
+        `http://${request.headers.host ?? "localhost"}`,
+      );
       const rawPath = (request.url ?? "/").split(/[?#]/)[0];
 
+      if (
+        sessionKey(request) ||
+        url.pathname.startsWith("/api/account") ||
+        ((request.headers.authorization ||
+          url.pathname.startsWith("/api/internal/")) &&
+          existsSync(join(config.workbenchRootDir, "accounts/accounts.sqlite")))
+      )
+        await accountStore();
+      if (
+        (sessionKey(request) &&
+          !["GET", "HEAD", "OPTIONS"].includes(request.method || "")) ||
+        (url.pathname.startsWith("/api/account") && request.method !== "GET")
+      ) {
+        const origin = request.headers.origin;
+        if (
+          origin &&
+          !config.allowedOrigin
+            .split(",")
+            .map((s) => s.trim())
+            .includes(origin)
+        )
+          reject(403, "来源未授权");
+        if (request.headers["sec-fetch-site"] === "cross-site")
+          reject(403, "来源未授权");
+      }
+      if (
+        url.pathname.startsWith("/api/account") &&
+        request.method !== "OPTIONS"
+      ) {
+        const db = await accountStore();
+        const action = url.pathname.slice("/api/account".length);
+        const method = request.method;
+        const key = sessionKey(request) || "";
+        const user = db.current(key);
+        const json = async () => {
+          if (
+            request.headers["content-type"]?.split(";")[0] !==
+            "application/json"
+          )
+            reject(415, "需要 JSON");
+          const obj = JSON.parse(
+            Buffer.from(await readBoundedBody(request, 400000)).toString(),
+          );
+          if (!obj || typeof obj !== "object" || Array.isArray(obj))
+            reject(400, "无效的数据");
+          return obj;
+        };
+        const cookie = (value: string, age: number) =>
+          response.setHeader(
+            "Set-Cookie",
+            "__Host-issane=" +
+              value +
+              "; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=" +
+              age,
+          );
+        let result: unknown = { ok: true };
+        if (action === "/login" && method === "POST") {
+          const input = await json();
+          const nowMs = Date.now();
+          const ip = clientIp(request) || "local";
+          for (const [addr, limit] of attempts)
+            if (limit.until <= nowMs) attempts.delete(addr);
+          const limit = attempts.get(ip) || { n: 0, until: nowMs + 60000 };
+          if (++limit.n > 30) reject(429, "请稍后重试");
+          attempts.set(ip, limit);
+          cookie(await db.login(input.id, input.password), 604800);
+        } else if (action === "/setup" && method === "POST") {
+          const keeper = legacySession(request, config);
+          if (!keeper?.isKeeper) reject(403, "需要原 KP 凭据");
+          const input = await json();
+          await db.create(
+            keeper.playerId,
+            keeper.displayName,
+            input.password,
+            "admin",
+          );
+          cookie(await db.login(keeper.playerId, input.password), 604800);
+        } else if (action === "/logout" && method === "POST") {
+          db.logout(key);
+          cookie("", 0);
+        } else {
+          if (!user) reject(401, "请登录");
+          const id = String(user.playerId);
+          if (action === "/me" && method === "GET") result = db.profile(id);
+          else if (action === "/me" && method === "PUT")
+            await db.edit(id, await json());
+          else {
+            if (user.role !== "admin") reject(403, "需要管理员");
+            if (action === "/keeper" && method === "GET") result = { ok: true };
+            else if (action === "/users" && method === "GET")
+              result = db.list();
+            else if (action === "/users" && method === "POST") {
+              const input = await json();
+              if (
+                config.tokenHashRecords.some(
+                  (r) =>
+                    r.isKeeper &&
+                    r.playerId.toLowerCase() ===
+                      String(input.id).trim().toLowerCase(),
+                )
+              )
+                reject(409, "管理员 ID 已保留");
+              result = await db.create(
+                input.id,
+                input.nickname,
+                input.password,
+              );
+            } else if (action.startsWith("/users/") && method === "DELETE")
+              db.remove(decodeURIComponent(action.slice(7)));
+            else reject(404, "接口不存在");
+          }
+        }
+        writeJson(response, 200, result, corsHeaders);
+        return;
+      }
       if (request.method === "OPTIONS") {
         response.writeHead(204, corsHeaders);
         response.end();
+        return;
+      }
+
+      if (
+        request.method === "GET" &&
+        (url.pathname.startsWith("/wiki/entities/entries/report.") ||
+          url.pathname.startsWith("/blog/images/report-"))
+      ) {
+        const activeSource = "/etc/nginx/snippets/trpg-content-active.conf";
+        const release =
+          existsSync(activeSource) &&
+          readlinkSync(activeSource).split("/").pop() ===
+            "trpg-content-release.conf";
+        const root = release
+          ? "/var/www/trpg-helper/current"
+          : config.contentRootDir;
+        const session = authenticate(request, config);
+        if (url.pathname.startsWith("/wiki/")) {
+          writeJson(
+            response,
+            200,
+            await readReport(
+              root,
+              url.pathname.slice("/wiki/entities/entries/".length),
+              session,
+            ),
+            corsHeaders,
+          );
+        } else {
+          const image = await readReportImage(root, url.pathname, session);
+          const extension = url.pathname.split(".").pop()?.toLowerCase();
+          writeBinary(response, 200, image, {
+            "content-type":
+              "image/" + (extension === "jpg" ? "jpeg" : extension),
+            "x-content-type-options": "nosniff",
+          });
+        }
         return;
       }
 
@@ -410,9 +609,9 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
 
       if (url.pathname === "/api/knowledge" || url.pathname.startsWith("/api/knowledge/")) {
         const authorization = request.headers.authorization;
-        if (!authorization) { writeJson(response, 401, { error: "需要知识库凭据。" }, corsHeaders); return; }
+        if (!authorization && !sessionKey(request)) { writeJson(response, 401, { error: "需要知识库凭据。" }, corsHeaders); return; }
         // 维护者沿用站点 KP 身份。rag_ 凭据交给世界观接口核对权限，保持独立的授权范围。
-        const isAgentToken = /^Bearer rag_[a-f0-9]{64}$/i.test(authorization);
+        const isAgentToken = /^Bearer rag_[a-f0-9]{64}$/i.test(authorization ?? "");
         const keeper = !isAgentToken && authenticate(request, config)?.isKeeper === true;
         if (!keeper && !isAgentToken) {
           writeJson(response, 403, { error: "需要维护者权限。" }, corsHeaders);
@@ -510,6 +709,7 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
         requireQqChatbotInternalToken(request, config);
         const body = validateQqChatbotTalkBody(await readJsonBody(request));
         const playerId = resolveQqPlayerId(config.qqChatbot, body.qqUserId);
+        if (accounts?.isDeleted(playerId)) reject(403, "账号已删除");
         const session = playerSessionFromId(config, playerId);
         const profile = await resolveNpcProfileByName(config.npcRootDir, body.npc);
         if (!canAccessNpc(session, profile.supportedPlayerIds)) {
@@ -582,7 +782,9 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
         requireKeeperSession(session);
 
         if (request.method === "GET" && url.pathname === "/api/admin/content/overview") {
-          writeJson(response, 200, await contentQueue.run("content", () => contentStore.getOverview()), corsHeaders);
+          const overview = await contentQueue.run("content", () => contentStore.getOverview());
+          if (accounts) overview.players = activePlayers().map(({ id, name }) => ({ id, displayName: name }));
+          writeJson(response, 200, overview, corsHeaders);
           return;
         }
 
@@ -634,6 +836,7 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
           const bytes = await readBoundedBody(request, config.contentMaxUploadBytes);
           const result = await contentQueue.run("content", () =>
             contentStore.saveImage({
+              report: url.searchParams.get("scope") === "report",
               fileName,
               mimeType: mimeType.split(";")[0].trim().toLowerCase(),
               bytes
@@ -727,7 +930,7 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
         const modules = await listModuleClueSummaries(
           config.moduleClueContentRootDir,
           config.moduleClueVisibilityRootDir,
-          config.supportedPlayerIds,
+          activePlayers().map(player => player.id),
           session
         );
         writeJson(response, 200, { modules }, corsHeaders);
@@ -746,8 +949,8 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
           config.moduleClueVisibilityRootDir,
           decodeRouteSegment(moduleClueMatch[1]),
           session,
-          config.supportedPlayerIds,
-          playerDirectory(config)
+          activePlayers().map(player => player.id),
+          activePlayers()
         );
         writeJson(response, 200, payload, corsHeaders);
         return;
@@ -765,7 +968,7 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
         requireKeeperSession(session);
         const { playerIds } = validateVisibilityUpdateBody(
           await readJsonBody(request),
-          config.supportedPlayerIds
+          activePlayers().map(player => player.id)
         );
         await updateModuleClueVisibility(
           config.moduleClueContentRootDir,
@@ -784,7 +987,7 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
           writeJson(response, 401, { error: "unauthorized" }, corsHeaders);
           return;
         }
-        requirePlayerSession(session);
+        if (!sessionKey(request)) requirePlayerSession(session);
         const npcId = url.searchParams.get("npcId");
         if (!npcId) throw new Error("npcId is required");
         await requireNpcAccess(config, session, npcId);
@@ -805,7 +1008,7 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
           writeJson(response, 401, { error: "unauthorized" }, corsHeaders);
           return;
         }
-        requirePlayerSession(session);
+        if (!sessionKey(request)) requirePlayerSession(session);
         const chatRequest = validateChatRequest(await readJsonBody(request));
         await requireNpcAccess(config, session, chatRequest.npcId!);
         const result = await queue.run(queueKey(chatRequest.npcId!, session.playerId), () =>
@@ -821,7 +1024,7 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
           writeJson(response, 401, { error: "unauthorized" }, corsHeaders);
           return;
         }
-        requirePlayerSession(session);
+        if (!sessionKey(request)) requirePlayerSession(session);
         const { npcId } = validateNpcIdBody(await readJsonBody(request));
         await requireNpcAccess(config, session, npcId);
         const result = await queue.run(queueKey(npcId, session.playerId), () =>
@@ -854,6 +1057,7 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
   });
   // HTTP 服务关闭时释放知识库的目录连接，测试也可以关闭后重新打开原数据目录。
   server.once("close", () => {
+    void opening?.then(store => store.db.close()).catch(() => {});
     void music?.then(store => store.close()).catch(() => {});
     void knowledge?.then((store) => { store.close(); }).catch(() => {});
   });
