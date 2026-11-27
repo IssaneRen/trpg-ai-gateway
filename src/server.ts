@@ -580,17 +580,20 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
         const owner=String(user.playerId);
         if (request.method !== "GET") {
           const id = url.searchParams.get("id") || "";
+          const role = url.searchParams.get("role") ?? "player";
+          if (role !== "player" && role !== "host") reject(400,"未知跑团身份");
           if (!modules.some(m=>m.id===id)) reject(404,"模组不存在");
-          if (request.method === "DELETE") diary.remove(owner,id);
+          if (request.method === "DELETE") diary.remove(owner,id,role);
           else if (request.method === "PUT") {
             let body;
             try { body = JSON.parse(Buffer.from(await readBoundedBody(request,16384)).toString("utf8")); }
             catch (err) { if (!(err instanceof SyntaxError)) throw err; reject(400,"JSON 格式错误"); }
             if (!body || typeof body!=="object" || Array.isArray(body)) reject(400,"需要 JSON 对象");
-            diary.record(owner,id,body);
+            diary.record(owner,id,body,role);
           } else reject(405,"不支持的请求");
         }
-        writeJson(response,200,{version:1,exportedAt:new Date().toISOString(),modules,records:diary.records()},corsHeaders);
+        const both = url.searchParams.get("roles") === "all";
+        writeJson(response,200,{version:both?2:1,exportedAt:new Date().toISOString(),modules,records:diary.records(both)},corsHeaders);
         return;
       }
       if (url.pathname.startsWith("/api/reading/")) {
