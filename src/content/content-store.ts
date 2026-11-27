@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { randomUUID } from "node:crypto";
 import {
   existsSync,
@@ -447,19 +448,53 @@ export class ContentStore {
 
   async saveWiki(entry: unknown): Promise<WikiEntryDocument> {
     validateWikiEntry(entry);
+    await this.updateWiki((root) => {
+      writeFileAtomic(join(root, "entities", "entries", `${entry.id}.json`), `${JSON.stringify(entry, null, 2)}\n`);
+    });
+    return entry;
+  }
+
+  async saveModule(id: string, input: unknown): Promise<Record<string, unknown>> {
+    assertSafeId(id, "模组 id");
+    if (!input || typeof input !== "object" || !("expected" in input) || !("changes" in input)
+        || !input.changes || typeof input.changes !== "object" || Array.isArray(input.changes)) {
+      throw new Error("请提交原档案和修改字段");
+    }
+    const filename = join("entities", "modules.json");
+    const modules = readJson<Array<Record<string, unknown>>>(join(this.wikiRoot, filename));
+    const current = modules.find(record => record.id === id);
+    if (!current) throw Object.assign(new Error("模组不存在"), { statusCode: 404 });
+    if (!isDeepStrictEqual(current, input.expected)) {
+      throw Object.assign(new Error("模组已被其他人修改，请刷新后重新编辑"), { statusCode: 409 });
+    }
+    const limits: Record<string, number> = { displayName: 160, summary: 4000, author: 160, ruleSystem: 120, playerCount: 80, duration: 80, cover: 512 };
+    for (const [key, value] of Object.entries(input.changes)) {
+      if (!Object.hasOwn(limits, key) || typeof value !== "string" || value.length > limits[key]) throw new Error("模组字段或长度无效");
+      const text = value.trim();
+      if (key === "displayName") requireString(text, "模组名称");
+      if (key === "cover" && text) {
+        const prefix = this.options.publicUploadBaseUrl.replace(/\/+$/, "") + "/";
+        const path = text.slice(prefix.length);
+        if (!text.startsWith(prefix) || !/^\d{4}\/\d{2}\/[a-z0-9-]+\.(?:png|jpg|webp|gif|avif)$/.test(path)
+            || !existsSync(join(this.options.uploadRootDir, path))) throw new Error("请选择已上传的封面");
+      }
+      if (text) current[key] = text;
+      else delete current[key];
+    }
+    await this.updateWiki(root => writeFileAtomic(join(root, filename), `${JSON.stringify(modules, null, 2)}\n`));
+    return current;
+  }
+
+  private async updateWiki(change: (root: string) => void): Promise<void> {
     const stage = join(tmpdir(), `trpg-wiki-save-${randomUUID()}`);
-    const stagedWikiRoot = join(stage, "wiki");
+    const root = join(stage, "wiki");
     await mkdir(stage, { recursive: true });
     try {
-      if (existsSync(this.wikiRoot)) await cp(this.wikiRoot, stagedWikiRoot, { recursive: true });
-      else await mkdir(join(stagedWikiRoot, "entities", "entries"), { recursive: true });
-      writeFileAtomic(
-        join(stagedWikiRoot, "entities", "entries", `${entry.id}.json`),
-        `${JSON.stringify(entry, null, 2)}\n`
-      );
-      await this.rebuildWikiIndex(stagedWikiRoot);
-      await replaceDirectories([{ source: stagedWikiRoot, target: this.wikiRoot }]);
-      return readJson<WikiEntryDocument>(join(this.wikiRoot, "entities", "entries", `${entry.id}.json`));
+      if (existsSync(this.wikiRoot)) await cp(this.wikiRoot, root, { recursive: true });
+      else await mkdir(join(root, "entities", "entries"), { recursive: true });
+      change(root);
+      await this.rebuildWikiIndex(root);
+      await replaceDirectories([{ source: root, target: this.wikiRoot }]);
     } finally {
       await rm(stage, { recursive: true, force: true });
     }

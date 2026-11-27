@@ -833,6 +833,18 @@ export function createApp(config: RuntimeConfig = loadRuntimeConfig(), options: 
           return;
         }
 
+        const moduleMatch = rawPath.match(/^\/api\/admin\/content\/modules\/([^/]+)$/);
+        if (request.method === "PUT" && moduleMatch) {
+          const source = "/etc/nginx/snippets/trpg-content-active.conf";
+          if (existsSync(source) && readlinkSync(source).endsWith("trpg-content-release.conf")) {
+            reject(409, "Wiki 当前使用发布版，请先切换到运行时内容");
+          }
+          const id = decodeRouteSegment(moduleMatch[1]);
+          const body = JSON.parse(Buffer.from(await readBoundedBody(request, 131072)).toString("utf8"));
+          writeJson(response, 200, await contentQueue.run("content", () => contentStore.saveModule(id, body)), corsHeaders);
+          return;
+        }
+
         const blogMatch = rawPath.match(/^\/api\/admin\/content\/blog\/([^/]+)$/);
         if (blogMatch) {
           const id = decodeRouteSegment(blogMatch[1]);
